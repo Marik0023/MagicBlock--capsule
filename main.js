@@ -293,11 +293,19 @@ loader.load('./assets/time_capsule_case_v1.glb', (gltf) => {
     // so the lid appears static. Use the clip value only if it is meaningfully different;
     // otherwise derive a closed pose from the correct hinge axis (local Z) to preserve animation.
     let closedQuat = closedFromMotionFirst || null;
-    const sameAsOpen = !closedQuat || state.lidOpenQuat.angleTo(closedQuat) < THREE.MathUtils.degToRad(2);
-    if (sameAsOpen) {
-      const closeAngle = THREE.MathUtils.degToRad(-47);
+    const clipDeltaRad = closedQuat ? state.lidOpenQuat.angleTo(closedQuat) : 0;
+    const clipDeltaDeg = THREE.MathUtils.radToDeg(clipDeltaRad);
+
+    // Some exports only store a tiny 11° motion in the clip (visually looks like "no closing").
+    // If the clip delta is too small, synthesize a full close motion around the correct local hinge axis (Z).
+    const clipIsUsable = !!closedQuat && clipDeltaDeg >= 20 && clipDeltaDeg <= 160;
+    if (!clipIsUsable) {
+      const closeAngle = THREE.MathUtils.degToRad(-56);
       const deltaClose = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), closeAngle);
       closedQuat = state.lidOpenQuat.clone().multiply(deltaClose);
+      console.info('[lid] Using synthetic close pose. clipDeltaDeg=', clipDeltaDeg.toFixed(2));
+    } else {
+      console.info('[lid] Using GLB close pose. clipDeltaDeg=', clipDeltaDeg.toFixed(2));
     }
     state.lidClosedQuat = closedQuat.normalize();
 
