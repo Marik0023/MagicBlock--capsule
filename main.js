@@ -58,12 +58,6 @@ const state = {
   rootBaseY: 0,
   rootBaseRotY: 0,
   spinAngle: 0,
-
-  lidMixer: null,
-  lidAction: null,
-  lidMotionDuration: 0,
-  lidMotionClosedToOpen: true,
-  lidUsesClipPlayback: false,
 };
 
 // ---------- Three.js scene ----------
@@ -403,67 +397,11 @@ function autoSolveClosedLidQuat({
   return null;
 }
 
-function setupLidClipPlayback({ motionClip, boneNode, openQuat }) {
-  if (!motionClip || !boneNode) return false;
-
-  try {
-    const mixer = new THREE.AnimationMixer(state.root);
-    const action = mixer.clipAction(motionClip);
-    if (!action) return false;
-
-    action.reset();
-    action.enabled = true;
-    action.setEffectiveWeight(1);
-    action.setEffectiveTimeScale(1);
-    action.setLoop(THREE.LoopOnce, 1);
-    action.clampWhenFinished = true;
-    action.play();
-
-    const motionTrack = (motionClip.tracks || []).find((t) =>
-      typeof t?.name === 'string' &&
-      t.name.endsWith('.quaternion') &&
-      t.name.includes('Bone_00') &&
-      !!t?.values &&
-      t.values.length >= 8
-    ) || null;
-
-    let closedToOpen = true;
-    if (motionTrack && openQuat) {
-      const v = motionTrack.values;
-      const first = new THREE.Quaternion(v[0], v[1], v[2], v[3]).normalize();
-      const li = v.length - 4;
-      const last = new THREE.Quaternion(v[li], v[li + 1], v[li + 2], v[li + 3]).normalize();
-      const dFirst = openQuat.angleTo(first);
-      const dLast = openQuat.angleTo(last);
-      // if last is closer to open pose -> clip goes closed->open
-      closedToOpen = dLast <= dFirst;
-    }
-
-    state.lidMixer = mixer;
-    state.lidAction = action;
-    state.lidMotionDuration = Math.max(0.001, motionClip.duration || 0.001);
-    state.lidMotionClosedToOpen = closedToOpen;
-    state.lidUsesClipPlayback = true;
-
-    // Start in open pose according to our UI convention (lidAnimT = 1 means open).
-    const openTime = closedToOpen ? state.lidMotionDuration : 0;
-    mixer.setTime(openTime);
-    return true;
-  } catch (e) {
-    console.warn('[lid] Failed to init clip playback, fallback to quaternion solver', e);
-    state.lidMixer = null;
-    state.lidAction = null;
-    state.lidMotionDuration = 0;
-    state.lidUsesClipPlayback = false;
-    return false;
-  }
-}
-
 // ---------- Load model ----------
 const loader = new GLTFLoader();
 
 loader.load(
-  './assets/time_capsule_case_v1.glb',
+  './assets/time_capsule_case_v2.glb',
   (gltf) => {
     state.gltf = gltf;
     state.root = gltf.scene;
@@ -517,155 +455,34 @@ loader.load(
     state.screens.name = gltf.scene.getObjectByName('screen_name');
     state.screens.avatar = gltf.scene.getObjectByName('screen_avatar');
 
-    // Lid pose setup
-    if (state.lidBone || state.lidControl) {
-      const boneNode = state.lidBone || state.lidControl;
-      state.lidUsesClipPlayback = false;
+    // Lid pose setup (reworked for the updated v2 GLB)
+    // Animate on the hinge bone directly with a single local-axis rotation.
+    if (state.lidBone || state.lidHinge || state.lidControl) {
+      const controlNode = state.lidBone || state.lidHinge || state.lidControl;
 
-      const clips = Array.isArray(gltf.animations) ? gltf.animations : [];
+      state.lidControl = controlNode;
+      state.lidBone = state.lidBone || controlNode;
+      state.lidBoneOpenQuat = controlNode.quaternion.clone();
+      state.lidOpenQuat = state.lidBoneOpenQuat.clone();
 
-      const getBoneQuatTrack = (clip) => {
-        if (!clip || !Array.isArray(clip.tracks)) return null;
-        return (
-          clip.tracks.find((t) =>
-            typeof t?.name === 'string' &&
-            t.name.endsWith('.quaternion') &&
-            t.name.includes('Bone_00') &&
-            !!t?.values &&
-            t.values.length >= 4
-          ) || null
-        );
-      };
+      // time_capsule_case_v2.glb: clean close = Bone_00 local -Z rotation.
+      // 35deg closes the seam visually and keeps the lid nearly level.
+      const closeAxisLocal = new THREE.Vector3(0, 0, -1);
+      const closeAngleDeg = 35;
+      const closeDelta = new THREE.Quaternion().setFromAxisAngle(
+        closeAxisLocal,
+        THREE.MathUtils.degToRad(closeAngleDeg)
+      );
 
-      const qFromTrackIndex = (track, index) => {
-        const v = track?.values;
-        if (!v || v.length < 4) return null;
-
-        const maxIndex = Math.floor(v.length / 4) - 1;
-        const idx = Math.max(0, Math.min(maxIndex, Math.floor(index)));
-        const i = idx * 4;
-        return new THREE.Quaternion(v[i], v[i + 1], v[i + 2], v[i + 3]).normalize();
-      };
-
-      const openClip =
-        clips.find((c) => /ArmatureAction$/.test(c.name || '')) ||
-        clips.find((c) => !(c.name || '').includes('Action.00')) ||
-        clips[0];
-
-      const motionClip =
-        clips.find((c) => (c.name || '').includes('Action.001')) ||
-        clips.find((c) => (c.name || '').includes('Action.002')) ||
-        clips[0];
-
-      const openTrack = getBoneQuatTrack(openClip);
-      const motionTrack = getBoneQuatTrack(motionClip);
-
-      const openFromClip = qFromTrackIndex(openTrack, (openTrack?.values?.length || 0) / 4 - 1);
-      const openFromMotionLast = qFromTrackIndex(motionTrack, (motionTrack?.values?.length || 0) / 4 - 1);
-      const closedFromMotionFirst = qFromTrackIndex(motionTrack, 0);
-
-      state.lidBoneOpenQuat = openFromClip || openFromMotionLast || boneNode.quaternion.clone();
-      boneNode.quaternion.copy(state.lidBoneOpenQuat);
-
-      let closedQuat = closedFromMotionFirst || null;
-      const clipDeltaRad = closedQuat ? state.lidBoneOpenQuat.angleTo(closedQuat) : 0;
-      const clipDeltaDeg = THREE.MathUtils.radToDeg(clipDeltaRad);
-
-      // Primary fix: drive the actual exported GLB animation clip instead of reconstructing a synthetic
-      // closed quaternion from AABB heuristics. This avoids wrong axis/order and ensures the lid follows
-      // the exact authored motion (hinge + any skin deformation nuances).
-      const clipPlaybackReady = !!motionClip && !!motionTrack && setupLidClipPlayback({
-        motionClip,
-        boneNode,
-        openQuat: state.lidBoneOpenQuat,
-      });
-
-      if (clipPlaybackReady) {
-        state.lidAnimUsesHingeFallback = false;
-        state.lidControl = boneNode;
-        state.lidOpenQuat = state.lidBoneOpenQuat.clone();
-        state.lidClosedQuat = closedQuat ? closedQuat.clone().normalize() : state.lidBoneOpenQuat.clone();
-
-        console.info('[lid] Using GLB clip playback for lid motion. clip=', motionClip.name, 'clipDeltaDeg=', clipDeltaDeg.toFixed(2), 'closedToOpen=', state.lidMotionClosedToOpen);
-      } else {
-        // Main fix: auto-solve closed pose (instead of guessing synthCloseDeg only)
-        state.lidAnimUsesHingeFallback = false;
-        state.lidControl = boneNode;
-        state.lidOpenQuat = state.lidBoneOpenQuat.clone();
-
-        const autoClosed = autoSolveClosedLidQuat({
-          boneNode,
-          openQuat: state.lidOpenQuat,
-          clipClosedQuat: closedQuat || null,
-          angleMinDeg: 30,
-          angleMaxDeg: 78,
-          angleStepDeg: 1,
-        });
-
-        if (autoClosed) {
-          state.lidClosedQuat = autoClosed.clone().normalize();
-          console.info('[lid] Using auto-solved synthetic close on Bone_00');
-        } else {
-          // Fallback-of-fallback
-          const rawAxis = getRawClipAxisDelta(state.lidOpenQuat, closedQuat || state.lidOpenQuat);
-          const hingeAxisLocal = snapDominantAxis(rawAxis);
-          const synthCloseDeg = 48;
-
-          const deltaClose = new THREE.Quaternion().setFromAxisAngle(
-            hingeAxisLocal,
-            THREE.MathUtils.degToRad(synthCloseDeg)
-          );
-
-          // Try both orders and choose less drift
-          const qA = state.lidOpenQuat.clone().multiply(deltaClose).normalize();
-          const qB = deltaClose.clone().multiply(state.lidOpenQuat).normalize();
-
-          const original = boneNode.quaternion.clone();
-
-          boneNode.quaternion.copy(qA);
-          state.root?.updateWorldMatrix(true, true);
-          let driftA = Infinity;
-          {
-            const boxes = computeBoxesForCapsule();
-            if (boxes) {
-              const bc = boxes.baseBox.getCenter(new THREE.Vector3());
-              const lc = boxes.lidBox.getCenter(new THREE.Vector3());
-              const dx = lc.x - bc.x;
-              const dz = lc.z - bc.z;
-              driftA = dx * dx + dz * dz;
-            }
-          }
-
-          boneNode.quaternion.copy(qB);
-          state.root?.updateWorldMatrix(true, true);
-          let driftB = Infinity;
-          {
-            const boxes = computeBoxesForCapsule();
-            if (boxes) {
-              const bc = boxes.baseBox.getCenter(new THREE.Vector3());
-              const lc = boxes.lidBox.getCenter(new THREE.Vector3());
-              const dx = lc.x - bc.x;
-              const dz = lc.z - bc.z;
-              driftB = dx * dx + dz * dz;
-            }
-          }
-
-          boneNode.quaternion.copy(original);
-          state.root?.updateWorldMatrix(true, true);
-
-          state.lidClosedQuat = (driftA <= driftB ? qA : qB);
-          console.warn(
-            '[lid] autoSolve failed, using static fallback synthCloseDeg=',
-            synthCloseDeg,
-            'axis=',
-            hingeAxisLocal.toArray(),
-            'order=',
-            driftA <= driftB ? 'post' : 'pre'
-          );
-        }
-      }
-
+      state.lidClosedQuat = state.lidOpenQuat.clone().multiply(closeDelta).normalize();
+      state.lidAnimUsesHingeFallback = false;
       state.lidAnimT = 1; // start open
+
+      console.info('[lid:v2] direct hinge-bone close animation', {
+        node: state.lidControl?.name,
+        axis: closeAxisLocal.toArray(),
+        closeAngleDeg,
+      });
     }
 
     // Re-center pivot + ground alignment after lid pose is initialized
@@ -1025,7 +842,7 @@ ui.downloadBtn.addEventListener('click', () => {
 // ---------- Seal animation ----------
 function animateSealSequence() {
   const start = performance.now();
-  const duration = 2300;
+  const duration = 2400;
 
   function step(now) {
     const t = Math.min(1, (now - start) / duration);
@@ -1036,11 +853,11 @@ function animateSealSequence() {
       : 1 - Math.pow(-2 * t + 2, 3) / 2;
 
     // Lid closes during ~72% of timeline
-    const lidPhase = Math.min(1, eased / 0.72);
+    const lidPhase = Math.min(1, eased / 0.86);
     state.lidAnimT = 1 - lidPhase;
 
     // Stable absolute spin angle (no rotation accumulation drift)
-    state.spinAngle = Math.sin(t * Math.PI) * 0.75;
+    state.spinAngle = Math.sin(t * Math.PI) * 0.46;
 
     if (t < 1) {
       requestAnimationFrame(step);
@@ -1071,23 +888,15 @@ const _qTmp = new THREE.Quaternion();
 function tick() {
   const dt = Math.min(clock.getDelta(), 0.05);
 
-  // 1) Drive lid from the authored GLB clip when available (most reliable),
-  //    otherwise fallback to manual quaternion interpolation.
-  if (state.lidUsesClipPlayback && state.lidMixer && state.lidMotionDuration > 0) {
-    const u = THREE.MathUtils.clamp(state.lidAnimT, 0, 1); // UI convention: 1=open, 0=closed
-    const clipTime = state.lidMotionClosedToOpen
-      ? u * state.lidMotionDuration
-      : (1 - u) * state.lidMotionDuration;
-    state.lidMixer.setTime(clipTime);
-  } else {
-    if (state.lidBone && state.lidBoneOpenQuat) {
-      state.lidBone.quaternion.copy(state.lidBoneOpenQuat);
-    }
+  // 1) Reset lid bone to exported open pose every frame
+  //    then apply interpolated lid quaternion to the selected control.
+  if (state.lidBone && state.lidBoneOpenQuat) {
+    state.lidBone.quaternion.copy(state.lidBoneOpenQuat);
+  }
 
-    if (state.lidControl && state.lidClosedQuat && state.lidOpenQuat) {
-      _qTmp.copy(state.lidClosedQuat).slerp(state.lidOpenQuat, state.lidAnimT);
-      state.lidControl.quaternion.copy(_qTmp);
-    }
+  if (state.lidControl && state.lidClosedQuat && state.lidOpenQuat) {
+    _qTmp.copy(state.lidClosedQuat).slerp(state.lidOpenQuat, state.lidAnimT);
+    state.lidControl.quaternion.copy(_qTmp);
   }
 
   // 2) Keep root fixed in place and only apply absolute spin offset during seal
