@@ -1,6 +1,6 @@
-import * as THREE from 'https://esm.sh/three@0.161.0';
-import { GLTFLoader } from 'https://esm.sh/three@0.161.0/examples/jsm/loaders/GLTFLoader.js';
-import { OrbitControls } from 'https://esm.sh/three@0.161.0/examples/jsm/controls/OrbitControls.js';
+import * as THREE from "https://unpkg.com/three@0.160.1/build/three.module.js";
+import { OrbitControls } from "https://unpkg.com/three@0.160.1/examples/jsm/controls/OrbitControls.js";
+import { GLTFLoader } from "https://unpkg.com/three@0.160.1/examples/jsm/loaders/GLTFLoader.js";
 
 const ui = {
   introModal: document.getElementById('introModal'),
@@ -95,7 +95,40 @@ window.addEventListener('resize', resize);
 
 // ---------- Load model ----------
 const loader = new GLTFLoader();
-const fitCameraToCapsule = () => {
+let capsuleBaseMesh = null;
+let capsuleLidMesh = null;
+
+function findCapsuleParts(root) {
+  root.traverse((obj) => {
+    if (!obj.isMesh) return;
+    const n = (obj.name || '').toLowerCase();
+    const p = (obj.parent?.name || '').toLowerCase();
+    if (!capsuleBaseMesh && (n.includes('capsule_base') || p.includes('capsule_base'))) capsuleBaseMesh = obj.parent?.name?.toLowerCase().includes('capsule_base') ? obj.parent : obj;
+    if (!capsuleLidMesh && (n.includes('capsule_lid') || p.includes('capsule_lid'))) capsuleLidMesh = obj.parent?.name?.toLowerCase().includes('capsule_lid') ? obj.parent : obj;
+  });
+}
+
+function getCapsuleFocusObject() {
+  if (!modelRoot) return null;
+  if (capsuleBaseMesh || capsuleLidMesh) {
+    const group = new THREE.Group();
+    if (capsuleBaseMesh) group.add(capsuleBaseMesh.clone(false));
+    if (capsuleLidMesh) group.add(capsuleLidMesh.clone(false));
+    // copy world matrices for bbox calc
+    group.children.forEach((c, i) => {
+      const src = i === 0 ? capsuleBaseMesh : capsuleLidMesh;
+      if (!src) return;
+      src.updateWorldMatrix(true, true);
+      c.matrix.copy(src.matrixWorld);
+      c.matrixAutoUpdate = false;
+      c.traverse(() => {});
+    });
+    return group;
+  }
+  return modelRoot;
+}
+
+function fitCameraToCapsule() {
   const targetObj = state.capsuleBase || state.capsuleLid || state.root;
   if (!targetObj) return;
 
@@ -178,7 +211,7 @@ loader.load('./assets/time_capsule_case_v1.glb', (gltf) => {
   }
 
   // Fit camera AFTER lid pose is set, using only capsule parts (not armature helpers)
-  fitCameraToCapsule();
+  if (typeof fitCameraToCapsule === "function") fitCameraToCapsule();
 
   setupScreenPlaceholders();
   updateDynamicTextures();
