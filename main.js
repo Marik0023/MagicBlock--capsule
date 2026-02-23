@@ -125,6 +125,9 @@ loader.load('./assets/time_capsule_case_v1.glb', (gltf) => {
   // Find named nodes
   state.capsuleLid = gltf.scene.getObjectByName('capsule_lid') || gltf.scene.getObjectByName('capsule_lid.001');
   state.capsuleBase = gltf.scene.getObjectByName('capsule_base');
+  state.capsuleGroup = new THREE.Group();
+  if (state.capsuleBase) state.capsuleGroup.add(state.capsuleBase.clone(false));
+  if (state.capsuleLid) state.capsuleGroup.add(state.capsuleLid.clone(false));
   state.screens.lid = gltf.scene.getObjectByName('screen_lid');
   state.screens.name = gltf.scene.getObjectByName('screen_name');
   state.screens.avatar = gltf.scene.getObjectByName('screen_avatar');
@@ -154,9 +157,11 @@ loader.load('./assets/time_capsule_case_v1.glb', (gltf) => {
 
 
 function fitCameraToCapsule() {
-  if (!state.capsuleGroup) return;
+  const targetObj = state.capsuleBase || state.capsuleLid || state.root;
+  if (!targetObj) return;
 
-  const box = new THREE.Box3().setFromObject(state.capsuleGroup);
+  const box = new THREE.Box3().setFromObject(targetObj);
+  if (state.capsuleBase && state.capsuleLid) { box.makeEmpty(); box.expandByObject(state.capsuleBase); box.expandByObject(state.capsuleLid); }
   if (!Number.isFinite(box.min.x) || box.isEmpty()) return;
 
   const size = box.getSize(new THREE.Vector3());
