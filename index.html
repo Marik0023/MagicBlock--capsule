@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Time Capsule</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div id="app">
+    <div id="introModal" class="modal is-open" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <div class="modal-card">
+        <h1 id="modalTitle">Підготуй капсулу часу</h1>
+        <p class="muted">Спочатку введи нік та додай аватар. Без цього далі не пустить.</p>
+
+        <form id="introForm" class="form-grid">
+          <label class="field">
+            <span>Нікнейм <b>*</b></span>
+            <input id="nicknameInput" type="text" maxlength="24" placeholder="Наприклад: Markiian Sora" required />
+            <small id="nickHint">Рекомендовано до 16 символів для гарного вигляду на кейсі</small>
+          </label>
+
+          <label class="field">
+            <span>Аватар <b>*</b></span>
+            <input id="avatarInput" type="file" accept="image/png,image/jpeg,image/webp" required />
+            <small>PNG / JPG / WEBP, до 5MB</small>
+          </label>
+
+          <div class="avatar-preview-wrap">
+            <div class="avatar-preview" id="avatarPreview">No avatar</div>
+          </div>
+
+          <button id="startBtn" class="btn btn-primary" type="submit" disabled>Продовжити</button>
+        </form>
+      </div>
+    </div>
+
+    <header class="topbar">
+      <div class="brand">TIME CAPSULE • TGE EDITION</div>
+      <div id="profileMini" class="profile-mini hidden">
+        <img id="profileMiniAvatar" alt="avatar" />
+        <span id="profileMiniNick"></span>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="viewer-panel">
+        <div id="viewer"></div>
+        <div class="viewer-overlay hidden" id="sealedOverlay">
+          <div class="seal-badge">SEALED</div>
+          <p>Капсулу запечатано до TGE</p>
+        </div>
+      </section>
+
+      <aside class="side-panel">
+        <div class="card">
+          <h2>Message for the future</h2>
+          <label class="field">
+            <span>Текст (до 300 символів)</span>
+            <textarea id="messageInput" maxlength="300" rows="7" placeholder="Напиши повідомлення, яке залишиться в капсулі..."></textarea>
+            <div class="char-row"><span>Emoji можна ✅</span><span id="charCount">0 / 300</span></div>
+          </label>
+
+          <div class="until-box">
+            <div class="until-title">Until the...</div>
+            <div class="until-value">TGE</div>
+            <div class="until-note">Дата відкриття з’явиться пізніше</div>
+          </div>
+
+          <div class="actions">
+            <button id="sealBtn" class="btn btn-primary" disabled>Seal Capsule</button>
+            <button id="downloadBtn" class="btn btn-ghost hidden" type="button">Download image</button>
+          </div>
+        </div>
+
+        <div class="card compact">
+          <h3>Статус</h3>
+          <ul class="status-list">
+            <li><span>Нік</span><b id="statusNick">—</b></li>
+            <li><span>Аватар</span><b id="statusAvatar">—</b></li>
+            <li><span>Текст</span><b id="statusText">0 / 300</b></li>
+            <li><span>Капсула</span><b id="statusSeal">Open</b></li>
+          </ul>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <script type="module" src="./main.js"></script>
+</body>
+</html>
