@@ -35,6 +35,10 @@ const state = {
   capsuleLid: null,
   capsuleBase: null,
   lidControl: null,
+  lidBone: null,
+  lidHinge: null,
+  lidBoneOpenQuat: null,
+  lidAnimUsesHingeFallback: false,
   screens: {
     lid: null,
     name: null,
@@ -241,10 +245,13 @@ loader.load('./assets/time_capsule_case_v1.glb', (gltf) => {
 
   // IMPORTANT:
   // - capsuleLid is used for bounds/screens (visual mesh branch)
-  // - lidControl is the node we actually rotate for open/close animation
-  //   In this GLB the correct hinge motion comes from Bone_00 (armature bone).
+  // - lidBone keeps the exported open pose (Bone_00)
+  // - lidHinge is a rigid parent for the lid branch; we use it as fallback animation control
+  //   because this GLB's embedded motion clip only contains ~11° of movement.
   state.capsuleLid = lidMeshNode || lidHingeNode;
-  state.lidControl = lidBoneNode || lidHingeNode || lidMeshNode;
+  state.lidBone = lidBoneNode || null;
+  state.lidHinge = lidHingeNode || null;
+  state.lidControl = (state.lidBone || state.lidHinge || lidMeshNode || null);
   state.capsuleBase = gltf.scene.getObjectByName('capsule_base');
   state.capsuleGroup = new THREE.Group();
   if (state.capsuleBase) state.capsuleGroup.add(state.capsuleBase.clone(false));
@@ -253,9 +260,11 @@ loader.load('./assets/time_capsule_case_v1.glb', (gltf) => {
   state.screens.name = gltf.scene.getObjectByName('screen_name');
   state.screens.avatar = gltf.scene.getObjectByName('screen_avatar');
 
-  if (state.lidControl) {
-    // Use the GLB's own animation keyframes for the lid poses (instead of guessing axis/angle).
-    // This fixes the crooked lid because we reuse the exact exported quaternions for Bone_00.
+  if (state.lidBone || state.lidControl) {
+    const boneNode = state.lidBone || state.lidControl;
+
+    // Use the GLB animation to get the exact OPEN pose.
+    // If the available close pose is too small (<= ~20°), animate the rigid hinge node instead.
     const clips = Array.isArray(gltf.animations) ? gltf.animations : [];
     const getBoneQuatTrack = (clip) => {
       if (!clip || !Array.isArray(clip.tracks)) return null;
@@ -269,15 +278,18 @@ loader.load('./assets/time_capsule_case_v1.glb', (gltf) => {
     const qFromTrackIndex = (track, index) => {
       const v = track?.values;
       if (!v || v.length < 4) return null;
-      const i = Math.max(0, Math.min(index, Math.floor(v.length / 4) - 1)) * 4;
+      const maxIndex = Math.floor(v.length / 4) - 1;
+      const idx = Math.max(0, Math.min(maxIndex, Math.floor(index)));
+      const i = idx * 4;
       return new THREE.Quaternion(v[i], v[i + 1], v[i + 2], v[i + 3]).normalize();
     };
 
-    // Preferred clips in this model:
-    // - ArmatureAction (static/open pose)
-    // - Armature.001Action.001 / .002 (motion clip; first key is closed, last key is open)
-    const openClip = clips.find((c) => /ArmatureAction$/.test(c.name || '')) || clips.find((c) => !(c.name || '').includes('Action.00')) || clips[0];
-    const motionClip = clips.find((c) => (c.name || '').includes('Action.001')) || clips.find((c) => (c.name || '').includes('Action.002')) || clips[0];
+    const openClip = clips.find((c) => /ArmatureAction$/.test(c.name || ''))
+      || clips.find((c) => !(c.name || '').includes('Action.00'))
+      || clips[0];
+    const motionClip = clips.find((c) => (c.name || '').includes('Action.001'))
+      || clips.find((c) => (c.name || '').includes('Action.002'))
+      || clips[0];
 
     const openTrack = getBoneQuatTrack(openClip);
     const motionTrack = getBoneQuatTrack(motionClip);
@@ -286,31 +298,47 @@ loader.load('./assets/time_capsule_case_v1.glb', (gltf) => {
     const openFromMotionLast = qFromTrackIndex(motionTrack, (motionTrack?.values?.length || 0) / 4 - 1);
     const closedFromMotionFirst = qFromTrackIndex(motionTrack, 0);
 
-    // Keep the exact exported OPEN pose (this matched your reference in v4).
-    state.lidOpenQuat = openFromClip || openFromMotionLast || state.lidControl.quaternion.clone();
+    state.lidBoneOpenQuat = openFromClip || openFromMotionLast || boneNode.quaternion.clone();
+    boneNode.quaternion.copy(state.lidBoneOpenQuat);
 
-    // In some exports the "closed" key we read is identical (or nearly identical) to open,
-    // so the lid appears static. Use the clip value only if it is meaningfully different;
-    // otherwise derive a closed pose from the correct hinge axis (local Z) to preserve animation.
     let closedQuat = closedFromMotionFirst || null;
-    const clipDeltaRad = closedQuat ? state.lidOpenQuat.angleTo(closedQuat) : 0;
+    const clipDeltaRad = closedQuat ? state.lidBoneOpenQuat.angleTo(closedQuat) : 0;
     const clipDeltaDeg = THREE.MathUtils.radToDeg(clipDeltaRad);
-
-    // Some exports only store a tiny 11° motion in the clip (visually looks like "no closing").
-    // If the clip delta is too small, synthesize a full close motion around the correct local hinge axis (Z).
     const clipIsUsable = !!closedQuat && clipDeltaDeg >= 20 && clipDeltaDeg <= 160;
-    if (!clipIsUsable) {
-      const closeAngle = THREE.MathUtils.degToRad(-56);
-      const deltaClose = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), closeAngle);
-      closedQuat = state.lidOpenQuat.clone().multiply(deltaClose);
-      console.info('[lid] Using synthetic close pose. clipDeltaDeg=', clipDeltaDeg.toFixed(2));
-    } else {
-      console.info('[lid] Using GLB close pose. clipDeltaDeg=', clipDeltaDeg.toFixed(2));
-    }
-    state.lidClosedQuat = closedQuat.normalize();
 
-    // Force exact reference open pose from the GLB animation data.
-    state.lidControl.quaternion.copy(state.lidOpenQuat);
+    if (clipIsUsable) {
+      state.lidAnimUsesHingeFallback = false;
+      state.lidControl = boneNode;
+      state.lidOpenQuat = state.lidBoneOpenQuat.clone();
+      state.lidClosedQuat = closedQuat.normalize();
+      console.info('[lid] Using GLB close pose on Bone_00. clipDeltaDeg=', clipDeltaDeg.toFixed(2));
+    } else if (state.lidHinge) {
+      // Fallback: keep Bone_00 in the exact exported OPEN pose and rotate the rigid hinge node.
+      // The hinge axis equivalent to Bone_00 local Z is capsule_lid.001 local +Y.
+      state.lidAnimUsesHingeFallback = true;
+      state.lidControl = state.lidHinge;
+      state.lidOpenQuat = state.lidHinge.quaternion.clone();
+
+      const synthCloseDeg = 56; // tuneable if you want tighter/looser closing
+      const deltaClose = new THREE.Quaternion().setFromAxisAngle(
+        new THREE.Vector3(0, 1, 0),
+        THREE.MathUtils.degToRad(synthCloseDeg)
+      );
+      state.lidClosedQuat = state.lidOpenQuat.clone().multiply(deltaClose).normalize();
+      console.info('[lid] Using hinge fallback close pose. clipDeltaDeg=', clipDeltaDeg.toFixed(2), ' synthCloseDeg=', synthCloseDeg);
+    } else {
+      // Last resort: synthetic rotation on the bone itself (older fallback).
+      state.lidAnimUsesHingeFallback = false;
+      state.lidControl = boneNode;
+      state.lidOpenQuat = state.lidBoneOpenQuat.clone();
+      const deltaClose = new THREE.Quaternion().setFromAxisAngle(
+        new THREE.Vector3(0, 0, 1),
+        THREE.MathUtils.degToRad(-56)
+      );
+      state.lidClosedQuat = state.lidOpenQuat.clone().multiply(deltaClose).normalize();
+      console.info('[lid] Using bone synthetic close (no hinge node). clipDeltaDeg=', clipDeltaDeg.toFixed(2));
+    }
+
     state.lidAnimT = 1;
   }
 
@@ -649,6 +677,10 @@ const clock = new THREE.Clock();
 function tick() {
   const dt = Math.min(clock.getDelta(), 0.05);
 
+  if (state.lidBone && state.lidBoneOpenQuat) {
+    // Keep the exported open pose stable; fallback close animation happens on the rigid hinge node.
+    state.lidBone.quaternion.copy(state.lidBoneOpenQuat);
+  }
   if (state.lidControl && state.lidClosedQuat && state.lidOpenQuat) {
     _qTmp.copy(state.lidClosedQuat).slerp(state.lidOpenQuat, state.lidAnimT);
     state.lidControl.quaternion.copy(_qTmp);
