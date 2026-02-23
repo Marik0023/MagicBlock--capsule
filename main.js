@@ -58,6 +58,12 @@ const state = {
   rootBaseY: 0,
   rootBaseRotY: 0,
   spinAngle: 0,
+
+  lidMixer: null,
+  lidAction: null,
+  lidMotionDuration: 0,
+  lidMotionClosedToOpen: true,
+  lidUsesClipPlayback: false,
 };
 
 // ---------- Three.js scene ----------
@@ -222,227 +228,6 @@ function fitCameraToCapsule() {
 }
 
 // ---------- Lid auto-solver helpers (main fix) ----------
-let _capsuleGeomMetricCache = null;
-
-function clamp01(v) {
-  return Math.max(0, Math.min(1, v));
-}
-
-function quantile(sortedArr, q) {
-  if (!sortedArr || sortedArr.length === 0) return 0;
-  const qq = clamp01(q);
-  const idx = (sortedArr.length - 1) * qq;
-  const i0 = Math.floor(idx);
-  const i1 = Math.min(sortedArr.length - 1, i0 + 1);
-  const t = idx - i0;
-  return sortedArr[i0] * (1 - t) + sortedArr[i1] * t;
-}
-
-function collectSampleParts(rootObj, maxPoints = 1200) {
-  const meshes = [];
-  let totalVerts = 0;
-
-  rootObj?.traverse?.((obj) => {
-    if (!obj?.isMesh || !obj.geometry?.attributes?.position) return;
-    const pos = obj.geometry.attributes.position;
-    if (!pos || pos.count <= 0) return;
-    meshes.push(obj);
-    totalVerts += pos.count;
-  });
-
-  if (!meshes.length || totalVerts <= 0) return [];
-
-  const stride = Math.max(1, Math.ceil(totalVerts / Math.max(1, maxPoints)));
-  const parts = [];
-
-  for (const mesh of meshes) {
-    const pos = mesh.geometry.attributes.position;
-    const count = pos.count;
-    const arr = [];
-
-    for (let i = 0; i < count; i += stride) {
-      arr.push(pos.getX(i), pos.getY(i), pos.getZ(i));
-    }
-
-    if (!arr.length && count > 0) {
-      arr.push(pos.getX(0), pos.getY(0), pos.getZ(0));
-    }
-
-    parts.push({
-      mesh,
-      local: new Float32Array(arr),
-    });
-  }
-
-  return parts;
-}
-
-function transformLocalSamplesToWorld(parts, out = []) {
-  out.length = 0;
-
-  for (const part of parts || []) {
-    const e = part.mesh.matrixWorld.elements;
-    const a = part.local;
-
-    for (let i = 0; i < a.length; i += 3) {
-      const x = a[i], y = a[i + 1], z = a[i + 2];
-      const wx = e[0] * x + e[4] * y + e[8]  * z + e[12];
-      const wy = e[1] * x + e[5] * y + e[9]  * z + e[13];
-      const wz = e[2] * x + e[6] * y + e[10] * z + e[14];
-      out.push(wx, wy, wz);
-    }
-  }
-
-  return out;
-}
-
-function buildCapsuleGeomMetricCache() {
-  if (!state.capsuleBase || !state.capsuleLid) return null;
-
-  state.root?.updateWorldMatrix(true, true);
-
-  const baseParts = collectSampleParts(state.capsuleBase, 1400);
-  const lidParts = collectSampleParts(state.capsuleLid, 1800);
-  if (!baseParts.length || !lidParts.length) return null;
-
-  const baseWorld = transformLocalSamplesToWorld(baseParts, []);
-  if (!baseWorld.length) return null;
-
-  const ys = [];
-  const xs = [];
-  const zs = [];
-  for (let i = 0; i < baseWorld.length; i += 3) {
-    xs.push(baseWorld[i]);
-    ys.push(baseWorld[i + 1]);
-    zs.push(baseWorld[i + 2]);
-  }
-
-  xs.sort((a, b) => a - b);
-  ys.sort((a, b) => a - b);
-  zs.sort((a, b) => a - b);
-
-  const xMin = quantile(xs, 0.03);
-  const xMax = quantile(xs, 0.97);
-  const zMin = quantile(zs, 0.03);
-  const zMax = quantile(zs, 0.97);
-  const baseSizeX = Math.max(1e-6, xMax - xMin);
-  const baseSizeZ = Math.max(1e-6, zMax - zMin);
-  const baseSizeY = Math.max(1e-6, quantile(ys, 0.99) - quantile(ys, 0.01));
-
-  // IMPORTANT: use a trimmed top percentile to ignore hinge pegs / small protrusions.
-  const rimY = quantile(ys, 0.955);
-  const majorAxis = baseSizeX >= baseSizeZ ? 'x' : 'z';
-
-  return {
-    baseParts,
-    lidParts,
-    baseWorld,
-    scratchLidWorld: [],
-    xMin,
-    xMax,
-    zMin,
-    zMax,
-    baseSizeX,
-    baseSizeZ,
-    baseSizeY,
-    rimY,
-    majorAxis,
-  };
-}
-
-function ensureCapsuleGeomMetricCache() {
-  if (_capsuleGeomMetricCache) return _capsuleGeomMetricCache;
-  _capsuleGeomMetricCache = buildCapsuleGeomMetricCache();
-  return _capsuleGeomMetricCache;
-}
-
-function computeSeamMetricsFromSamples() {
-  const cache = ensureCapsuleGeomMetricCache();
-  if (!cache) return null;
-
-  state.root?.updateWorldMatrix(true, true);
-  const lidWorld = transformLocalSamplesToWorld(cache.lidParts, cache.scratchLidWorld);
-  if (!lidWorld.length) return null;
-
-  const pad = Math.max(cache.baseSizeX, cache.baseSizeZ) * 0.035;
-  const edgeBand = Math.max(0.01, Math.min(cache.baseSizeX, cache.baseSizeZ) * 0.16);
-  const x0 = cache.xMin - pad;
-  const x1 = cache.xMax + pad;
-  const z0 = cache.zMin - pad;
-  const z1 = cache.zMax + pad;
-
-  const bins = 10;
-  const binCounts = new Array(bins).fill(0);
-  const binGapSums = new Array(bins).fill(0);
-  const yVals = [];
-
-  const useX = cache.majorAxis === 'x';
-  const axisMin = useX ? cache.xMin : cache.zMin;
-  const axisMax = useX ? cache.xMax : cache.zMax;
-  const axisSpan = Math.max(1e-6, axisMax - axisMin);
-
-  for (let i = 0; i < lidWorld.length; i += 3) {
-    const x = lidWorld[i];
-    const y = lidWorld[i + 1];
-    const z = lidWorld[i + 2];
-
-    if (x < x0 || x > x1 || z < z0 || z > z1) continue;
-
-    // Focus on the perimeter ring (the actual seam), not the whole AABB footprint.
-    const dEdge = Math.min(
-      Math.abs(x - cache.xMin),
-      Math.abs(cache.xMax - x),
-      Math.abs(z - cache.zMin),
-      Math.abs(cache.zMax - z)
-    );
-    if (dEdge > edgeBand) continue;
-
-    yVals.push(y);
-
-    const axisVal = useX ? x : z;
-    const t = clamp01((axisVal - axisMin) / axisSpan);
-    const bi = Math.min(bins - 1, Math.floor(t * bins));
-    binCounts[bi] += 1;
-    binGapSums[bi] += (y - cache.rimY);
-  }
-
-  if (yVals.length < 12) return null;
-
-  yVals.sort((a, b) => a - b);
-  const seamY = quantile(yVals, 0.22); // ignore low outliers like hinges/pegs
-  const seamLift = Math.max(0, seamY - cache.rimY);
-  const seamPenetration = Math.max(0, cache.rimY - seamY);
-
-  let coveredBins = 0;
-  let meanGap = 0;
-  const gapMeans = [];
-  for (let i = 0; i < bins; i++) {
-    if (binCounts[i] > 0) {
-      coveredBins += 1;
-      const g = binGapSums[i] / binCounts[i];
-      gapMeans.push(g);
-      meanGap += g;
-    }
-  }
-  const coverage = coveredBins / bins;
-  meanGap = gapMeans.length ? meanGap / gapMeans.length : 0;
-  let gapSpread = 0;
-  if (gapMeans.length) {
-    for (const g of gapMeans) gapSpread += (g - meanGap) * (g - meanGap);
-    gapSpread = Math.sqrt(gapSpread / gapMeans.length);
-  }
-
-  return {
-    seamY,
-    rimY: cache.rimY,
-    seamLift,
-    seamPenetration,
-    coverage,
-    gapSpread,
-    pointCount: yVals.length,
-  };
-}
-
 function getRawClipAxisDelta(openQuat, closedQuat) {
   if (!openQuat || !closedQuat) return new THREE.Vector3(0, 0, -1);
 
@@ -558,62 +343,28 @@ function autoSolveClosedLidQuat({
         baseBox.getCenter(tmpCenterB);
         lidBox.getCenter(tmpCenterL);
 
-        // NOTE: lid center *must* move when a hinged lid closes, so scoring by center X/Z drift
-        // (the previous approach) incorrectly preferred half-open poses and caused the “slide back” look.
+        // Main issue: lid drifting in X/Z when closing
         const dx = tmpCenterL.x - tmpCenterB.x;
         const dz = tmpCenterL.z - tmpCenterB.z;
+        const horizontalOffset2 = dx * dx + dz * dz;
 
-        // BBox is kept only as a rough fallback signal.
-        // The primary score now comes from seam metrics sampled from real geometry vertices
-        // (trimmed perimeter ring), so hinge pegs / AABB inflation don't prematurely stop closure.
-        const baseSizeX = Math.max(1e-6, baseBox.max.x - baseBox.min.x);
-        const baseSizeZ = Math.max(1e-6, baseBox.max.z - baseBox.min.z);
-        const lidSizeX = Math.max(1e-6, lidBox.max.x - lidBox.min.x);
-        const lidSizeZ = Math.max(1e-6, lidBox.max.z - lidBox.min.z);
-        const xSpanErr = Math.abs(lidSizeX / baseSizeX - 1);
-        const zSpanErr = Math.abs(lidSizeZ / baseSizeZ - 1);
+        // Contact / fit score (lid should approach base top)
+        const yGap = Math.abs(lidBox.min.y - baseBox.max.y);
 
-        const overlapX = Math.max(0, Math.min(baseBox.max.x, lidBox.max.x) - Math.max(baseBox.min.x, lidBox.min.x));
-        const overlapZ = Math.max(0, Math.min(baseBox.max.z, lidBox.max.z) - Math.max(baseBox.min.z, lidBox.min.z));
-        const overlapArea = overlapX * overlapZ;
-        const baseArea = Math.max(1e-6, baseSizeX * baseSizeZ);
-        const lidArea = Math.max(1e-6, lidSizeX * lidSizeZ);
-        const overlapBaseRatio = overlapArea / baseArea;
-        const overlapLidRatio = overlapArea / lidArea;
-
-        const seam = computeSeamMetricsFromSamples();
-        const seamLift = seam ? seam.seamLift : Math.max(0, lidBox.min.y - baseBox.max.y);
-        const seamPenetration = seam ? seam.seamPenetration : Math.max(0, baseBox.max.y - lidBox.min.y);
-        const seamCoverage = seam ? seam.coverage : Math.min(overlapBaseRatio, overlapLidRatio);
-        const seamSpread = seam ? seam.gapSpread : 0;
-        const yGap = seam ? Math.abs(seam.seamY - seam.rimY) : Math.abs(lidBox.min.y - baseBox.max.y);
-
-        // Soft prior (avoid weird extremes), but much weaker than actual geometric fit.
+        // Soft prior (avoid weird extremes)
         const closeAngleFromOpen = openQuat.angleTo(qCandidate);
-        const targetCloseRad = THREE.MathUtils.degToRad(56);
+        const targetCloseRad = THREE.MathUtils.degToRad(48);
 
         let score = 0;
-        score += seamLift * seamLift * 18000;                                // seam still floating above rim
-        score += seamPenetration * seamPenetration * 9000;                    // seam pushed too deep into base
-        score += Math.max(0, 0.72 - seamCoverage) ** 2 * 2200;                // seam should cover perimeter along the long edge
-        score += seamSpread * seamSpread * 1400;                               // avoid one-side early contact / uneven gap
+        score += horizontalOffset2 * 250;                      // strongest priority
+        score += yGap * yGap * 180;                            // close fit
+        score += Math.abs(closeAngleFromOpen - targetCloseRad) * 3.5; // soft prior
 
-        // Weak bbox fallback only (no longer primary objective)
-        score += (xSpanErr * xSpanErr + zSpanErr * zSpanErr) * 80;
-        score += Math.max(0, 0.72 - overlapBaseRatio) ** 2 * 70;
-        score += Math.max(0, 0.72 - overlapLidRatio) ** 2 * 70;
+        // Penalize clearly too-high lid
+        if (lidBox.min.y > baseBox.max.y + 0.08) score += 25;
 
-        score += Math.abs(closeAngleFromOpen - targetCloseRad) * 0.6;         // weak prior only
-        score += (dx * dx + dz * dz) * 1.2;                                    // tiny tie-break only
-
-        // Strong penalty if seam metric couldn't be computed (bad candidate / not enough ring points)
-        if (!seam) score += 120;
-
-        // Penalize clearly too-high lid even by bbox (sanity fallback)
-        if (lidBox.min.y > baseBox.max.y + 0.10) score += 12;
-
-        // Penalize extreme overshoot
-        if (lidBox.min.y < baseBox.max.y - 0.18) score += 10;
+        // Penalize lid that overshoots too deep into base a lot (geometry mismatch)
+        if (lidBox.min.y < baseBox.max.y - 0.12) score += 15;
 
         if (!best || score < best.score) {
           best = {
@@ -625,8 +376,6 @@ function autoSolveClosedLidQuat({
             dx,
             dz,
             yGap,
-            seamCoverage,
-            seamSpread,
           };
         }
       }
@@ -646,14 +395,68 @@ function autoSolveClosedLidQuat({
       'dx=', best.dx.toFixed(4),
       'dz=', best.dz.toFixed(4),
       'yGap=', best.yGap.toFixed(4),
-      'seamCoverage=', (best.seamCoverage ?? 0).toFixed(3),
-      'seamSpread=', (best.seamSpread ?? 0).toFixed(4),
       'score=', best.score.toFixed(4)
     );
     return best.q;
   }
 
   return null;
+}
+
+function setupLidClipPlayback({ motionClip, boneNode, openQuat }) {
+  if (!motionClip || !boneNode) return false;
+
+  try {
+    const mixer = new THREE.AnimationMixer(state.root);
+    const action = mixer.clipAction(motionClip);
+    if (!action) return false;
+
+    action.reset();
+    action.enabled = true;
+    action.setEffectiveWeight(1);
+    action.setEffectiveTimeScale(1);
+    action.setLoop(THREE.LoopOnce, 1);
+    action.clampWhenFinished = true;
+    action.play();
+
+    const motionTrack = (motionClip.tracks || []).find((t) =>
+      typeof t?.name === 'string' &&
+      t.name.endsWith('.quaternion') &&
+      t.name.includes('Bone_00') &&
+      !!t?.values &&
+      t.values.length >= 8
+    ) || null;
+
+    let closedToOpen = true;
+    if (motionTrack && openQuat) {
+      const v = motionTrack.values;
+      const first = new THREE.Quaternion(v[0], v[1], v[2], v[3]).normalize();
+      const li = v.length - 4;
+      const last = new THREE.Quaternion(v[li], v[li + 1], v[li + 2], v[li + 3]).normalize();
+      const dFirst = openQuat.angleTo(first);
+      const dLast = openQuat.angleTo(last);
+      // if last is closer to open pose -> clip goes closed->open
+      closedToOpen = dLast <= dFirst;
+    }
+
+    state.lidMixer = mixer;
+    state.lidAction = action;
+    state.lidMotionDuration = Math.max(0.001, motionClip.duration || 0.001);
+    state.lidMotionClosedToOpen = closedToOpen;
+    state.lidUsesClipPlayback = true;
+
+    // Start in open pose according to our UI convention (lidAnimT = 1 means open).
+    const openTime = closedToOpen ? state.lidMotionDuration : 0;
+    mixer.setTime(openTime);
+    return true;
+  } catch (e) {
+    console.warn('[lid] Failed to init clip playback, fallback to quaternion solver', e);
+    state.lidMixer = null;
+    state.lidAction = null;
+    state.lidMotionDuration = 0;
+    state.lidUsesClipPlayback = false;
+    return false;
+  }
 }
 
 // ---------- Load model ----------
@@ -704,9 +507,6 @@ loader.load(
     state.lidControl = state.lidBone || state.lidHinge || lidMeshNode || null;
     state.capsuleBase = gltf.scene.getObjectByName('capsule_base') || capsuleBaseMesh || null;
 
-    // reset geometry metric cache (depends on actual loaded meshes)
-    _capsuleGeomMetricCache = null;
-
     // Optional grouping (debug/useful later)
     state.capsuleGroup = new THREE.Group();
     if (state.capsuleBase) state.capsuleGroup.add(state.capsuleBase.clone(false));
@@ -720,6 +520,7 @@ loader.load(
     // Lid pose setup
     if (state.lidBone || state.lidControl) {
       const boneNode = state.lidBone || state.lidControl;
+      state.lidUsesClipPlayback = false;
 
       const clips = Array.isArray(gltf.animations) ? gltf.animations : [];
 
@@ -770,73 +571,23 @@ loader.load(
       const clipDeltaRad = closedQuat ? state.lidBoneOpenQuat.angleTo(closedQuat) : 0;
       const clipDeltaDeg = THREE.MathUtils.radToDeg(clipDeltaRad);
 
-      // Geometry validation: some exports have a frame that is not truly closed.
-      // Use seam-based sampling first (trimmed perimeter ring), and keep bbox checks only as weak fallback.
-      let clipLooksClosedGeom = false;
-      if (closedQuat) {
-        const prevQuat = boneNode.quaternion.clone();
-        boneNode.quaternion.copy(closedQuat.clone().normalize());
-        state.root?.updateWorldMatrix(true, true);
+      // Primary fix: drive the actual exported GLB animation clip instead of reconstructing a synthetic
+      // closed quaternion from AABB heuristics. This avoids wrong axis/order and ensures the lid follows
+      // the exact authored motion (hinge + any skin deformation nuances).
+      const clipPlaybackReady = !!motionClip && !!motionTrack && setupLidClipPlayback({
+        motionClip,
+        boneNode,
+        openQuat: state.lidBoneOpenQuat,
+      });
 
-        const seam = computeSeamMetricsFromSamples();
-        let weakBboxOk = false;
-        const boxes = computeBoxesForCapsule();
-        if (boxes) {
-          const { baseBox, lidBox } = boxes;
-          const baseSizeX = Math.max(1e-6, baseBox.max.x - baseBox.min.x);
-          const baseSizeZ = Math.max(1e-6, baseBox.max.z - baseBox.min.z);
-          const lidSizeX = Math.max(1e-6, lidBox.max.x - lidBox.min.x);
-          const lidSizeZ = Math.max(1e-6, lidBox.max.z - lidBox.min.z);
-          const xSpanErr = Math.abs(lidSizeX / baseSizeX - 1);
-          const zSpanErr = Math.abs(lidSizeZ / baseSizeZ - 1);
-          const overlapX = Math.max(0, Math.min(baseBox.max.x, lidBox.max.x) - Math.max(baseBox.min.x, lidBox.min.x));
-          const overlapZ = Math.max(0, Math.min(baseBox.max.z, lidBox.max.z) - Math.max(baseBox.min.z, lidBox.min.z));
-          const overlapArea = overlapX * overlapZ;
-          const baseArea = Math.max(1e-6, baseSizeX * baseSizeZ);
-          const lidArea = Math.max(1e-6, lidSizeX * lidSizeZ);
-          const overlapBaseRatio = overlapArea / baseArea;
-          const overlapLidRatio = overlapArea / lidArea;
-          weakBboxOk = (
-            xSpanErr <= 0.20 &&
-            zSpanErr <= 0.20 &&
-            overlapBaseRatio >= 0.62 &&
-            overlapLidRatio >= 0.62
-          );
-        }
-
-        clipLooksClosedGeom = !!(
-          seam &&
-          seam.seamLift <= 0.035 &&
-          seam.seamPenetration <= 0.06 &&
-          seam.coverage >= 0.45 &&
-          seam.gapSpread <= 0.07 &&
-          weakBboxOk
-        );
-
-        boneNode.quaternion.copy(prevQuat);
-        state.root?.updateWorldMatrix(true, true);
-      }
-
-      const clipIsUsable = (
-        !!closedQuat &&
-        clipDeltaDeg >= 1.5 &&
-        clipDeltaDeg <= 160 &&
-        clipLooksClosedGeom
-      );
-
-      if (clipIsUsable) {
-        // Great: use real GLB close pose
+      if (clipPlaybackReady) {
         state.lidAnimUsesHingeFallback = false;
         state.lidControl = boneNode;
         state.lidOpenQuat = state.lidBoneOpenQuat.clone();
-        state.lidClosedQuat = closedQuat.normalize();
+        state.lidClosedQuat = closedQuat ? closedQuat.clone().normalize() : state.lidBoneOpenQuat.clone();
 
-        console.info('[lid] Using GLB close pose on Bone_00. clipDeltaDeg=', clipDeltaDeg.toFixed(2));
+        console.info('[lid] Using GLB clip playback for lid motion. clip=', motionClip.name, 'clipDeltaDeg=', clipDeltaDeg.toFixed(2), 'closedToOpen=', state.lidMotionClosedToOpen);
       } else {
-        if (closedQuat) {
-          const seamDbg = computeSeamMetricsFromSamples();
-          console.warn('[lid] Rejected GLB close pose (geometry validation failed). clipDeltaDeg=', clipDeltaDeg.toFixed(2), 'seam=', seamDbg);
-        }
         // Main fix: auto-solve closed pose (instead of guessing synthCloseDeg only)
         state.lidAnimUsesHingeFallback = false;
         state.lidControl = boneNode;
@@ -846,9 +597,7 @@ loader.load(
           boneNode,
           openQuat: state.lidOpenQuat,
           clipClosedQuat: closedQuat || null,
-          // Keep fallback search wide enough for other exports, but include small angles too.
-          // This particular capsule closes around ~11° in Bone_00 local rotation.
-          angleMinDeg: 2,
+          angleMinDeg: 30,
           angleMaxDeg: 78,
           angleStepDeg: 1,
         });
@@ -1322,15 +1071,23 @@ const _qTmp = new THREE.Quaternion();
 function tick() {
   const dt = Math.min(clock.getDelta(), 0.05);
 
-  // 1) Reset lid bone to exported open pose every frame
-  //    then apply interpolated lid quaternion to the selected control.
-  if (state.lidBone && state.lidBoneOpenQuat) {
-    state.lidBone.quaternion.copy(state.lidBoneOpenQuat);
-  }
+  // 1) Drive lid from the authored GLB clip when available (most reliable),
+  //    otherwise fallback to manual quaternion interpolation.
+  if (state.lidUsesClipPlayback && state.lidMixer && state.lidMotionDuration > 0) {
+    const u = THREE.MathUtils.clamp(state.lidAnimT, 0, 1); // UI convention: 1=open, 0=closed
+    const clipTime = state.lidMotionClosedToOpen
+      ? u * state.lidMotionDuration
+      : (1 - u) * state.lidMotionDuration;
+    state.lidMixer.setTime(clipTime);
+  } else {
+    if (state.lidBone && state.lidBoneOpenQuat) {
+      state.lidBone.quaternion.copy(state.lidBoneOpenQuat);
+    }
 
-  if (state.lidControl && state.lidClosedQuat && state.lidOpenQuat) {
-    _qTmp.copy(state.lidClosedQuat).slerp(state.lidOpenQuat, state.lidAnimT);
-    state.lidControl.quaternion.copy(_qTmp);
+    if (state.lidControl && state.lidClosedQuat && state.lidOpenQuat) {
+      _qTmp.copy(state.lidClosedQuat).slerp(state.lidOpenQuat, state.lidAnimT);
+      state.lidControl.quaternion.copy(_qTmp);
+    }
   }
 
   // 2) Keep root fixed in place and only apply absolute spin offset during seal
