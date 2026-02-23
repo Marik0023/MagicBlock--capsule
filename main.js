@@ -44,6 +44,8 @@ const state = {
   lidAnimT: 0,
   spinT: 0,
   sealAnimPlaying: false,
+  rootBaseY: 0,
+  idleEnabled: false,
 };
 
 // ---------- Three.js scene ----------
@@ -92,6 +94,10 @@ function resize() {
   camera.updateProjectionMatrix();
 }
 window.addEventListener('resize', resize);
+if ('ResizeObserver' in window) {
+  const viewerResizeObserver = new ResizeObserver(() => resize());
+  viewerResizeObserver.observe(ui.viewer);
+}
 
 // ---------- Load model ----------
 const loader = new GLTFLoader();
@@ -109,7 +115,7 @@ function findCapsuleParts(root) {
 }
 
 function getCapsuleFocusObject() {
-  if (!modelRoot) return null;
+  if (!state.root) return null;
   if (capsuleBaseMesh || capsuleLidMesh) {
     const group = new THREE.Group();
     if (capsuleBaseMesh) group.add(capsuleBaseMesh.clone(false));
@@ -125,7 +131,38 @@ function getCapsuleFocusObject() {
     });
     return group;
   }
-  return modelRoot;
+  return state.root;
+}
+
+function getCapsuleBounds() {
+  const box = new THREE.Box3();
+  box.makeEmpty();
+
+  if (state.capsuleBase) box.expandByObject(state.capsuleBase);
+  if (state.capsuleLid) box.expandByObject(state.capsuleLid);
+
+  if (box.isEmpty() && state.root) box.expandByObject(state.root);
+  return box;
+}
+
+function normalizeModelPivotAndGround() {
+  if (!state.root) return;
+
+  state.root.updateWorldMatrix(true, true);
+  const box = getCapsuleBounds();
+  if (box.isEmpty() || !Number.isFinite(box.min.x)) return;
+
+  const center = box.getCenter(new THREE.Vector3());
+  const minY = box.min.y;
+
+  // Center X/Z so any rotation happens around capsule center (prevents drifting left/right).
+  // Put the lowest point on the virtual floor so vertical position stays stable.
+  state.root.position.x -= center.x;
+  state.root.position.z -= center.z;
+  state.root.position.y -= minY;
+  state.root.updateWorldMatrix(true, true);
+
+  state.rootBaseY = state.root.position.y;
 }
 
 function fitCameraToCapsule() {
@@ -210,7 +247,10 @@ loader.load('./assets/time_capsule_case_v1.glb', (gltf) => {
     state.lidAnimT = 1;
   }
 
-  // Fit camera AFTER lid pose is set, using only capsule parts (not armature helpers)
+  // Re-center imported model pivot so it rotates around capsule center (not export origin)
+  normalizeModelPivotAndGround();
+
+  // Fit camera AFTER lid pose + pivot normalization, using only capsule parts (not armature helpers)
   if (typeof fitCameraToCapsule === "function") fitCameraToCapsule();
 
   setupScreenPlaceholders();
@@ -548,14 +588,14 @@ function tick() {
   }
 
   if (state.root) {
-    // subtle idle bob before sealing
+    // Keep capsule locked in place in idle state (no drifting).
     if (!state.sealed && !state.sealAnimPlaying) {
-      const t = performance.now() * 0.001;
-      state.root.rotation.y += dt * 0.18;
-      state.root.position.y = Math.sin(t * 1.1) * 0.02;
+      state.root.position.y = state.rootBaseY;
     } else if (state.sealAnimPlaying) {
       state.root.rotation.y += dt * (1.1 + state.spinT * 2.2);
-      state.root.position.y = 0;
+      state.root.position.y = state.rootBaseY;
+    } else {
+      state.root.position.y = state.rootBaseY;
     }
   }
 
