@@ -333,7 +333,7 @@ loader.load('./assets/time_capsule_case_v1.glb', (gltf) => {
         }
       }
 
-      const synthCloseDeg = 33; // tuned for this model: visually closes without overshooting through the base
+      const synthCloseDeg = 45; // tuned for this model: visually closes without overshooting through the base
       const deltaClose = new THREE.Quaternion().setFromAxisAngle(
         axis,
         THREE.MathUtils.degToRad(synthCloseDeg)
