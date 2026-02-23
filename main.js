@@ -468,7 +468,7 @@ loader.load(
       // time_capsule_case_v2.glb: clean close = Bone_00 local -Z rotation.
       // 35deg closes the seam visually and keeps the lid nearly level.
       const closeAxisLocal = new THREE.Vector3(0, 0, -1);
-      const closeAngleDeg = 35;
+      const closeAngleDeg = 0;
       const closeDelta = new THREE.Quaternion().setFromAxisAngle(
         closeAxisLocal,
         THREE.MathUtils.degToRad(closeAngleDeg)
