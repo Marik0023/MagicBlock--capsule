@@ -507,7 +507,10 @@ loader.load(
       let closedQuat = closedFromMotionFirst || null;
       const clipDeltaRad = closedQuat ? state.lidBoneOpenQuat.angleTo(closedQuat) : 0;
       const clipDeltaDeg = THREE.MathUtils.radToDeg(clipDeltaRad);
-      const clipIsUsable = !!closedQuat && clipDeltaDeg >= 20 && clipDeltaDeg <= 160;
+      // IMPORTANT: this model's authored close pose is only ~11° away from the open pose.
+      // The previous 20° threshold wrongly rejected a valid GLB close frame and forced
+      // the synthetic auto-solver (30-78°), which caused lid drift / incomplete closure.
+      const clipIsUsable = !!closedQuat && clipDeltaDeg >= 1.5 && clipDeltaDeg <= 160;
 
       if (clipIsUsable) {
         // Great: use real GLB close pose
@@ -527,7 +530,9 @@ loader.load(
           boneNode,
           openQuat: state.lidOpenQuat,
           clipClosedQuat: closedQuat || null,
-          angleMinDeg: 30,
+          // Keep fallback search wide enough for other exports, but include small angles too.
+          // This particular capsule closes around ~11° in Bone_00 local rotation.
+          angleMinDeg: 2,
           angleMaxDeg: 78,
           angleStepDeg: 1,
         });
