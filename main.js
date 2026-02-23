@@ -312,31 +312,34 @@ loader.load('./assets/time_capsule_case_v1.glb', (gltf) => {
       state.lidOpenQuat = state.lidBoneOpenQuat.clone();
       state.lidClosedQuat = closedQuat.normalize();
       console.info('[lid] Using GLB close pose on Bone_00. clipDeltaDeg=', clipDeltaDeg.toFixed(2));
-    } else if (state.lidHinge) {
-      // Fallback: keep Bone_00 in the exact exported OPEN pose and rotate the rigid hinge node.
-      // The hinge axis equivalent to Bone_00 local Z is capsule_lid.001 local +Y.
-      state.lidAnimUsesHingeFallback = true;
-      state.lidControl = state.lidHinge;
-      state.lidOpenQuat = state.lidHinge.quaternion.clone();
-
-      const synthCloseDeg = 56; // tuneable if you want tighter/looser closing
-      const deltaClose = new THREE.Quaternion().setFromAxisAngle(
-        new THREE.Vector3(0, 1, 0),
-        THREE.MathUtils.degToRad(synthCloseDeg)
-      );
-      state.lidClosedQuat = state.lidOpenQuat.clone().multiply(deltaClose).normalize();
-      console.info('[lid] Using hinge fallback close pose. clipDeltaDeg=', clipDeltaDeg.toFixed(2), ' synthCloseDeg=', synthCloseDeg);
     } else {
-      // Last resort: synthetic rotation on the bone itself (older fallback).
+      // Robust fallback: keep animation on Bone_00 (real hinge pivot).
+      // Rotating capsule_lid.001 changes orientation but NOT the parent's translated pivot,
+      // so it causes visibly crooked closing / side drift. Bone_00 must drive the close.
       state.lidAnimUsesHingeFallback = false;
       state.lidControl = boneNode;
       state.lidOpenQuat = state.lidBoneOpenQuat.clone();
+
+      // Reuse the clip's exact local closing axis (it is ~-Z on Bone_00),
+      // but scale the angle from ~11° to a full close.
+      let axis = new THREE.Vector3(0, 0, -1);
+      if (closedQuat) {
+        const qDeltaClip = state.lidBoneOpenQuat.clone().invert().multiply(closedQuat.clone().normalize());
+        const w = THREE.MathUtils.clamp(qDeltaClip.w, -1, 1);
+        const clipAxisAngle = 2 * Math.acos(w);
+        const sAA = Math.sqrt(Math.max(0, 1 - w * w));
+        if (sAA > 1e-5 && Number.isFinite(clipAxisAngle)) {
+          axis.set(qDeltaClip.x / sAA, qDeltaClip.y / sAA, qDeltaClip.z / sAA).normalize();
+        }
+      }
+
+      const synthCloseDeg = 58; // tuned for this model: visually closes without overshooting through the base
       const deltaClose = new THREE.Quaternion().setFromAxisAngle(
-        new THREE.Vector3(0, 0, 1),
-        THREE.MathUtils.degToRad(-56)
+        axis,
+        THREE.MathUtils.degToRad(synthCloseDeg)
       );
       state.lidClosedQuat = state.lidOpenQuat.clone().multiply(deltaClose).normalize();
-      console.info('[lid] Using bone synthetic close (no hinge node). clipDeltaDeg=', clipDeltaDeg.toFixed(2));
+      console.info('[lid] Using Bone_00 synthetic close. clipDeltaDeg=', clipDeltaDeg.toFixed(2), ' synthCloseDeg=', synthCloseDeg, ' axis=', axis.toArray().map(v=>v.toFixed(3)).join(','));
     }
 
     state.lidAnimT = 1;
@@ -678,7 +681,7 @@ function tick() {
   const dt = Math.min(clock.getDelta(), 0.05);
 
   if (state.lidBone && state.lidBoneOpenQuat) {
-    // Keep the exported open pose stable; fallback close animation happens on the rigid hinge node.
+    // Keep the exported open pose stable; fallback close animation happens on Bone_00 (real hinge pivot).
     state.lidBone.quaternion.copy(state.lidBoneOpenQuat);
   }
   if (state.lidControl && state.lidClosedQuat && state.lidOpenQuat) {
