@@ -1,6 +1,6 @@
-import * as THREE from 'https://esm.sh/three@0.161.0';
-import { GLTFLoader } from 'https://esm.sh/three@0.161.0/examples/jsm/loaders/GLTFLoader.js';
-import { OrbitControls } from 'https://esm.sh/three@0.161.0/examples/jsm/controls/OrbitControls.js';
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 const ui = {
   introModal: document.getElementById('introModal'),
@@ -122,14 +122,29 @@ loader.load('./assets/time_capsule_case_v1.glb', (gltf) => {
     }
   });
 
-  // Fit camera/controls target
-  const box = new THREE.Box3().setFromObject(gltf.scene);
+  // Fit camera/controls target (focus capsule meshes, not helper/armature bounds)
+  const box = new THREE.Box3();
+  let hasFocus = false;
+  const focusKeys = ['capsule_base', 'capsule_lid', 'cube.004_0', 'cube.005_0'];
+  gltf.scene.traverse((o) => {
+    if (!o.isMesh) return;
+    const n = (o.name || '').toLowerCase();
+    if (focusKeys.some(k => n.includes(k))) {
+      box.union(new THREE.Box3().setFromObject(o));
+      hasFocus = true;
+    }
+  });
+  if (!hasFocus || box.isEmpty()) box.setFromObject(gltf.scene);
   const size = new THREE.Vector3();
   const center = new THREE.Vector3();
   box.getSize(size);
   box.getCenter(center);
+  const maxDim = Math.max(size.x, size.y, size.z) || 1;
   controls.target.copy(center);
-  camera.position.set(center.x + size.x * 1.2, center.y + size.y * 0.9, center.z + size.z * 1.8);
+  camera.near = Math.max(0.01, maxDim / 200);
+  camera.far = Math.max(50, maxDim * 60);
+  camera.updateProjectionMatrix();
+  camera.position.set(center.x + maxDim * 1.0, center.y + maxDim * 0.7, center.z + maxDim * 1.45);
   camera.lookAt(center);
 
   // Find named nodes
