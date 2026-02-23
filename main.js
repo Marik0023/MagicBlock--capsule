@@ -254,18 +254,42 @@ loader.load('./assets/time_capsule_case_v1.glb', (gltf) => {
   state.screens.avatar = gltf.scene.getObjectByName('screen_avatar');
 
   if (state.lidControl) {
-    // Keep the model's exported pose as the OPEN state (it matches your reference screenshot).
-    // Then animate to a CLOSED state by rotating the real armature hinge (Bone_00) around local Z.
-    state.lidOpenQuat = state.lidControl.quaternion.clone();
+    // Use the GLB's own animation keyframes for the lid poses (instead of guessing axis/angle).
+    // This fixes the crooked lid because we reuse the exact exported quaternions for Bone_00.
+    const clips = Array.isArray(gltf.animations) ? gltf.animations : [];
+    const getBoneQuatTrack = (clip) => {
+      if (!clip || !Array.isArray(clip.tracks)) return null;
+      return clip.tracks.find((t) =>
+        typeof t?.name === 'string' &&
+        t.name.endsWith('.quaternion') &&
+        t.name.includes('Bone_00') &&
+        !!t?.values && t.values.length >= 4
+      ) || null;
+    };
+    const qFromTrackIndex = (track, index) => {
+      const v = track?.values;
+      if (!v || v.length < 4) return null;
+      const i = Math.max(0, Math.min(index, Math.floor(v.length / 4) - 1)) * 4;
+      return new THREE.Quaternion(v[i], v[i + 1], v[i + 2], v[i + 3]).normalize();
+    };
 
-    // ~46-48° closes the lid for this GLB while keeping the open pose perfectly straight.
-    // Using Bone_00 + local Z avoids the crooked/sideways lid issue.
-    const closeAngle = THREE.MathUtils.degToRad(-47);
-    const closeAxis = new THREE.Vector3(0, 0, 1);
-    const deltaClose = new THREE.Quaternion().setFromAxisAngle(closeAxis, closeAngle);
-    state.lidClosedQuat = state.lidOpenQuat.clone().multiply(deltaClose);
+    // Preferred clips in this model:
+    // - ArmatureAction (static/open pose)
+    // - Armature.001Action.001 / .002 (motion clip; first key is closed, last key is open)
+    const openClip = clips.find((c) => /ArmatureAction$/.test(c.name || '')) || clips.find((c) => !(c.name || '').includes('Action.00')) || clips[0];
+    const motionClip = clips.find((c) => (c.name || '').includes('Action.001')) || clips.find((c) => (c.name || '').includes('Action.002')) || clips[0];
 
-    // Start in the natural open pose from the file
+    const openTrack = getBoneQuatTrack(openClip);
+    const motionTrack = getBoneQuatTrack(motionClip);
+
+    const openFromClip = qFromTrackIndex(openTrack, (openTrack?.values?.length || 0) / 4 - 1);
+    const openFromMotionLast = qFromTrackIndex(motionTrack, (motionTrack?.values?.length || 0) / 4 - 1);
+    const closedFromMotionFirst = qFromTrackIndex(motionTrack, 0);
+
+    state.lidOpenQuat = openFromClip || openFromMotionLast || state.lidControl.quaternion.clone();
+    state.lidClosedQuat = closedFromMotionFirst || state.lidOpenQuat.clone();
+
+    // Force exact reference open pose from the GLB animation data.
     state.lidControl.quaternion.copy(state.lidOpenQuat);
     state.lidAnimT = 1;
   }
