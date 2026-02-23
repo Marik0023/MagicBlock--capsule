@@ -337,22 +337,45 @@ function autoSolveClosedLidQuat({
         baseBox.getCenter(tmpCenterB);
         lidBox.getCenter(tmpCenterL);
 
-        // Main issue: lid drifting in X/Z when closing
+        // NOTE: lid center *must* move when a hinged lid closes, so scoring by center X/Z drift
+        // (the previous approach) incorrectly preferred half-open poses and caused the “slide back” look.
         const dx = tmpCenterL.x - tmpCenterB.x;
         const dz = tmpCenterL.z - tmpCenterB.z;
-        const horizontalOffset2 = dx * dx + dz * dz;
 
-        // Contact / fit score (lid should approach base top)
+        // Contact / fit score (closed lid should match base footprint + meet rim height)
         const yGap = Math.abs(lidBox.min.y - baseBox.max.y);
+        const lift = Math.max(0, lidBox.min.y - baseBox.max.y);
+        const penetration = Math.max(0, baseBox.max.y - lidBox.min.y);
 
-        // Soft prior (avoid weird extremes)
+        const baseSizeX = Math.max(1e-6, baseBox.max.x - baseBox.min.x);
+        const baseSizeZ = Math.max(1e-6, baseBox.max.z - baseBox.min.z);
+        const lidSizeX = Math.max(1e-6, lidBox.max.x - lidBox.min.x);
+        const lidSizeZ = Math.max(1e-6, lidBox.max.z - lidBox.min.z);
+        const xSpanErr = Math.abs(lidSizeX / baseSizeX - 1);
+        const zSpanErr = Math.abs(lidSizeZ / baseSizeZ - 1);
+
+        const overlapX = Math.max(0, Math.min(baseBox.max.x, lidBox.max.x) - Math.max(baseBox.min.x, lidBox.min.x));
+        const overlapZ = Math.max(0, Math.min(baseBox.max.z, lidBox.max.z) - Math.max(baseBox.min.z, lidBox.min.z));
+        const overlapArea = overlapX * overlapZ;
+        const baseArea = Math.max(1e-6, baseSizeX * baseSizeZ);
+        const lidArea = Math.max(1e-6, lidSizeX * lidSizeZ);
+        const overlapBaseRatio = overlapArea / baseArea;
+        const overlapLidRatio = overlapArea / lidArea;
+
+        // Soft prior (avoid weird extremes), but much weaker than actual geometric fit.
         const closeAngleFromOpen = openQuat.angleTo(qCandidate);
-        const targetCloseRad = THREE.MathUtils.degToRad(48);
+        const targetCloseRad = THREE.MathUtils.degToRad(56);
 
         let score = 0;
-        score += horizontalOffset2 * 250;                      // strongest priority
-        score += yGap * yGap * 180;                            // close fit
-        score += Math.abs(closeAngleFromOpen - targetCloseRad) * 3.5; // soft prior
+        score += lift * lift * 6000;                                        // lid still floating above rim
+        score += penetration * penetration * 4000;                           // too deep into base
+        score += (xSpanErr * xSpanErr + zSpanErr * zSpanErr) * 600;          // closed footprint should match base
+        score += Math.max(0, 0.84 - overlapBaseRatio) ** 2 * 500;            // require good overlap in XZ
+        score += Math.max(0, 0.84 - overlapLidRatio) ** 2 * 500;
+        score += Math.abs(closeAngleFromOpen - targetCloseRad) * 0.7;        // weak prior only
+
+        // Very small tie-break only (don't dominate the score)
+        score += (dx * dx + dz * dz) * 2;
 
         // Penalize clearly too-high lid
         if (lidBox.min.y > baseBox.max.y + 0.08) score += 25;
@@ -507,10 +530,48 @@ loader.load(
       let closedQuat = closedFromMotionFirst || null;
       const clipDeltaRad = closedQuat ? state.lidBoneOpenQuat.angleTo(closedQuat) : 0;
       const clipDeltaDeg = THREE.MathUtils.radToDeg(clipDeltaRad);
-      // IMPORTANT: this model's authored close pose is only ~11° away from the open pose.
-      // The previous 20° threshold wrongly rejected a valid GLB close frame and forced
-      // the synthetic auto-solver (30-78°), which caused lid drift / incomplete closure.
-      const clipIsUsable = !!closedQuat && clipDeltaDeg >= 1.5 && clipDeltaDeg <= 160;
+
+      // Geometry validation: some exports have an animation frame that is NOT a real closed pose
+      // (it may only be a slightly different open pose). Accept the clip only if it actually fits
+      // the base footprint reasonably well in XZ, not just by quaternion delta.
+      let clipLooksClosedGeom = false;
+      if (closedQuat) {
+        const prevQuat = boneNode.quaternion.clone();
+        boneNode.quaternion.copy(closedQuat.clone().normalize());
+        state.root?.updateWorldMatrix(true, true);
+        const boxes = computeBoxesForCapsule();
+        if (boxes) {
+          const { baseBox, lidBox } = boxes;
+          const baseSizeX = Math.max(1e-6, baseBox.max.x - baseBox.min.x);
+          const baseSizeZ = Math.max(1e-6, baseBox.max.z - baseBox.min.z);
+          const lidSizeX = Math.max(1e-6, lidBox.max.x - lidBox.min.x);
+          const lidSizeZ = Math.max(1e-6, lidBox.max.z - lidBox.min.z);
+          const xSpanErr = Math.abs(lidSizeX / baseSizeX - 1);
+          const zSpanErr = Math.abs(lidSizeZ / baseSizeZ - 1);
+          const overlapX = Math.max(0, Math.min(baseBox.max.x, lidBox.max.x) - Math.max(baseBox.min.x, lidBox.min.x));
+          const overlapZ = Math.max(0, Math.min(baseBox.max.z, lidBox.max.z) - Math.max(baseBox.min.z, lidBox.min.z));
+          const overlapArea = overlapX * overlapZ;
+          const baseArea = Math.max(1e-6, baseSizeX * baseSizeZ);
+          const lidArea = Math.max(1e-6, lidSizeX * lidSizeZ);
+          const overlapBaseRatio = overlapArea / baseArea;
+          const overlapLidRatio = overlapArea / lidArea;
+          clipLooksClosedGeom = (
+            xSpanErr <= 0.08 &&
+            zSpanErr <= 0.08 &&
+            overlapBaseRatio >= 0.80 &&
+            overlapLidRatio >= 0.80
+          );
+        }
+        boneNode.quaternion.copy(prevQuat);
+        state.root?.updateWorldMatrix(true, true);
+      }
+
+      const clipIsUsable = (
+        !!closedQuat &&
+        clipDeltaDeg >= 1.5 &&
+        clipDeltaDeg <= 160 &&
+        clipLooksClosedGeom
+      );
 
       if (clipIsUsable) {
         // Great: use real GLB close pose
@@ -521,6 +582,9 @@ loader.load(
 
         console.info('[lid] Using GLB close pose on Bone_00. clipDeltaDeg=', clipDeltaDeg.toFixed(2));
       } else {
+        if (closedQuat) {
+          console.warn('[lid] Rejected GLB close pose (geometry validation failed). clipDeltaDeg=', clipDeltaDeg.toFixed(2));
+        }
         // Main fix: auto-solve closed pose (instead of guessing synthCloseDeg only)
         state.lidAnimUsesHingeFallback = false;
         state.lidControl = boneNode;
