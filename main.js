@@ -1,6 +1,6 @@
-import * as THREE from 'https://unpkg.com/three@0.161.0/build/three.module.js?module';
-import { GLTFLoader } from 'https://unpkg.com/three@0.161.0/examples/jsm/loaders/GLTFLoader.js?module';
-import { OrbitControls } from 'https://unpkg.com/three@0.161.0/examples/jsm/controls/OrbitControls.js?module';
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js';
+import { GLTFLoader } from 'https://cdn.jsdelivr.net/npm/three@0.161.0/examples/jsm/loaders/GLTFLoader.js';
+import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.161.0/examples/jsm/controls/OrbitControls.js';
 
 const ui = {
   introModal: document.getElementById('introModal'),
@@ -101,7 +101,16 @@ loader.load('./assets/time_capsule_case_v1.glb', (gltf) => {
   scene.add(gltf.scene);
 
   // Ignore embedded animations intentionally (we animate lid in code)
+  // Defensive fix: remove invalid onBuild fields that can crash renderer in some exports/browser setups
   gltf.scene.traverse((obj) => {
+    if (obj.material) {
+      const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+      mats.forEach((m) => {
+        if (m && 'onBuild' in m && typeof m.onBuild !== 'function') {
+          try { delete m.onBuild; } catch (e) { m.onBuild = undefined; }
+        }
+      });
+    }
     if (!obj.isMesh) return;
     obj.castShadow = false;
     obj.receiveShadow = false;
