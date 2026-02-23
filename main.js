@@ -1,6 +1,6 @@
-import * as THREE from 'three';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import * as THREE from 'https://esm.sh/three@0.161.0';
+import { GLTFLoader } from 'https://esm.sh/three@0.161.0/examples/jsm/loaders/GLTFLoader.js';
+import { OrbitControls } from 'https://esm.sh/three@0.161.0/examples/jsm/controls/OrbitControls.js';
 
 const ui = {
   introModal: document.getElementById('introModal'),
@@ -44,10 +44,6 @@ const state = {
   lidAnimT: 0,
   spinT: 0,
   sealAnimPlaying: false,
-  rootBasePos: null,
-  rootBaseRotY: 0,
-  idleAngle: 0,
-  sealAngle: 0,
 };
 
 // ---------- Three.js scene ----------
@@ -103,8 +99,6 @@ loader.load('./assets/time_capsule_case_v1.glb', (gltf) => {
   state.gltf = gltf;
   state.root = gltf.scene;
   scene.add(gltf.scene);
-  state.rootBasePos = gltf.scene.position.clone();
-  state.rootBaseRotY = gltf.scene.rotation.y;
 
   // Ignore embedded animations intentionally (we animate lid in code)
   // Defensive fix: remove invalid onBuild fields that can crash renderer in some exports/browser setups
@@ -128,31 +122,6 @@ loader.load('./assets/time_capsule_case_v1.glb', (gltf) => {
     }
   });
 
-  // Fit camera/controls target (focus capsule meshes, not helper/armature bounds)
-  const box = new THREE.Box3();
-  let hasFocus = false;
-  const focusKeys = ['capsule_base', 'capsule_lid', 'cube.004_0', 'cube.005_0'];
-  gltf.scene.traverse((o) => {
-    if (!o.isMesh) return;
-    const n = (o.name || '').toLowerCase();
-    if (focusKeys.some(k => n.includes(k))) {
-      box.union(new THREE.Box3().setFromObject(o));
-      hasFocus = true;
-    }
-  });
-  if (!hasFocus || box.isEmpty()) box.setFromObject(gltf.scene);
-  const size = new THREE.Vector3();
-  const center = new THREE.Vector3();
-  box.getSize(size);
-  box.getCenter(center);
-  const maxDim = Math.max(size.x, size.y, size.z) || 1;
-  controls.target.copy(center);
-  camera.near = Math.max(0.01, maxDim / 200);
-  camera.far = Math.max(50, maxDim * 60);
-  camera.updateProjectionMatrix();
-  camera.position.set(center.x + maxDim * 1.0, center.y + maxDim * 0.7, center.z + maxDim * 1.45);
-  camera.lookAt(center);
-
   // Find named nodes
   state.capsuleLid = gltf.scene.getObjectByName('capsule_lid') || gltf.scene.getObjectByName('capsule_lid.001');
   state.capsuleBase = gltf.scene.getObjectByName('capsule_base');
@@ -170,6 +139,9 @@ loader.load('./assets/time_capsule_case_v1.glb', (gltf) => {
     state.lidAnimT = 1;
   }
 
+  // Fit camera AFTER lid pose is set, using only capsule parts (not armature helpers)
+  fitCameraToCapsule();
+
   setupScreenPlaceholders();
   updateDynamicTextures();
 
@@ -179,58 +151,6 @@ loader.load('./assets/time_capsule_case_v1.glb', (gltf) => {
   console.error('GLB load error', err);
   alert('Не вдалося завантажити 3D модель. Перевір, що сайт відкритий через локальний сервер або GitHub Pages.');
 });
-
-
-function resetAndCenterModel(object){
-  if(!object) return;
-  object.updateMatrixWorld(true);
-  const box = new THREE.Box3().setFromObject(object);
-  if (box.isEmpty()) return;
-  const center = box.getCenter(new THREE.Vector3());
-  const size = box.getSize(new THREE.Vector3());
-  object.position.sub(center);
-  object.position.y += size.y * 0.5;
-  object.updateMatrixWorld(true);
-}
-
-function fitObjectToView(object, controlsRef){
-  if(!object) return;
-  object.updateMatrixWorld(true);
-  const box = new THREE.Box3().setFromObject(object);
-  if (box.isEmpty()) return;
-  const center = box.getCenter(new THREE.Vector3());
-  const size = box.getSize(new THREE.Vector3());
-  const maxSize = Math.max(size.x, size.y, size.z, 0.001);
-  const fov = (camera.fov * Math.PI) / 180;
-  const dist = Math.max((maxSize * 0.9) / Math.tan(fov / 2), 1.2);
-
-  camera.near = Math.max(0.01, dist / 200);
-  camera.far = Math.max(50, dist * 30);
-  camera.updateProjectionMatrix();
-
-  camera.position.set(center.x + dist * 0.9, center.y + dist * 0.55, center.z + dist * 1.0);
-
-  if (controlsRef) {
-    controlsRef.target.copy(center);
-    controlsRef.minDistance = dist * 0.35;
-    controlsRef.maxDistance = dist * 4;
-    controlsRef.update();
-  }
-}
-
-function findCapsuleParts(root){
-  const out = { capsuleBase:null, capsuleLid:null, screenName:null, screenAvatar:null, screenLid:null };
-  root.traverse((obj)=>{
-    const n = (obj.name || '').toLowerCase();
-    if (!n) return;
-    if (!out.capsuleBase && n.includes('capsule_base')) out.capsuleBase = obj;
-    if (!out.capsuleLid && n.includes('capsule_lid')) out.capsuleLid = obj;
-    if (!out.screenName && n.includes('screen_name')) out.screenName = obj;
-    if (!out.screenAvatar && n.includes('screen_avatar')) out.screenAvatar = obj;
-    if (!out.screenLid && n.includes('screen_lid')) out.screenLid = obj;
-  });
-  return out;
-}
 
 function makeCanvasTexture(width, height, painter) {
   const canvas = document.createElement('canvas');
@@ -486,11 +406,6 @@ function animateSealSequence() {
     state.spinT = 0;
     state.sealed = true;
     state.sealAnimPlaying = false;
-    state.sealAngle = 0;
-    if (state.root && state.rootBasePos) {
-      state.root.position.y = state.rootBasePos.y;
-      state.root.rotation.y = state.rootBaseRotY;
-    }
     ui.statusSeal.textContent = 'Sealed';
     ui.sealedOverlay.classList.remove('hidden');
     ui.downloadBtn.classList.remove('hidden');
@@ -526,22 +441,14 @@ function tick() {
   }
 
   if (state.root) {
-    const t = performance.now() * 0.001;
-    const baseY = state.rootBasePos ? state.rootBasePos.y : 0;
-    const baseRotY = state.rootBaseRotY || 0;
-
-    // subtle idle bob before sealing (relative to imported transform)
+    // subtle idle bob before sealing
     if (!state.sealed && !state.sealAnimPlaying) {
-      state.idleAngle += dt * 0.18;
-      state.root.rotation.y = baseRotY + state.idleAngle;
-      state.root.position.y = baseY + Math.sin(t * 1.1) * 0.02;
+      const t = performance.now() * 0.001;
+      state.root.rotation.y += dt * 0.18;
+      state.root.position.y = Math.sin(t * 1.1) * 0.02;
     } else if (state.sealAnimPlaying) {
-      state.sealAngle += dt * (1.1 + state.spinT * 2.2);
-      state.root.rotation.y = baseRotY + state.idleAngle + state.sealAngle;
-      state.root.position.y = baseY;
-    } else {
-      state.root.position.y = baseY;
-      state.root.rotation.y = baseRotY + state.idleAngle;
+      state.root.rotation.y += dt * (1.1 + state.spinT * 2.2);
+      state.root.position.y = 0;
     }
   }
 
