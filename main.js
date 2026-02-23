@@ -455,34 +455,161 @@ loader.load(
     state.screens.name = gltf.scene.getObjectByName('screen_name');
     state.screens.avatar = gltf.scene.getObjectByName('screen_avatar');
 
-    // Lid pose setup (reworked for the updated v2 GLB)
-    // Animate on the hinge bone directly with a single local-axis rotation.
-    if (state.lidBone || state.lidHinge || state.lidControl) {
-      const controlNode = state.lidBone || state.lidHinge || state.lidControl;
+    // Lid pose setup
+    if (state.lidBone || state.lidControl) {
+      const boneNode = state.lidBone || state.lidControl;
 
-      state.lidControl = controlNode;
-      state.lidBone = state.lidBone || controlNode;
-      state.lidBoneOpenQuat = controlNode.quaternion.clone();
-      state.lidOpenQuat = state.lidBoneOpenQuat.clone();
+      const clips = Array.isArray(gltf.animations) ? gltf.animations : [];
 
-      // time_capsule_case_v2.glb: clean close = Bone_00 local -Z rotation.
-      // 35deg closes the seam visually and keeps the lid nearly level.
-      const closeAxisLocal = new THREE.Vector3(0, 0, -1);
-      const closeAngleDeg = 0;
-      const closeDelta = new THREE.Quaternion().setFromAxisAngle(
-        closeAxisLocal,
-        THREE.MathUtils.degToRad(closeAngleDeg)
-      );
+      // v2 model path (no baked animations): animate the real lid node directly.
+      // If the model has no Bone_00 and no clips, capsule_lid local quaternion is the open pose,
+      // and identity quaternion is the clean closed pose (fixed pivot in DCC).
+      if (!state.lidBone && lidMeshNode && clips.length === 0) {
+        state.lidAnimUsesHingeFallback = false;
+        state.lidControl = lidMeshNode;
+        state.lidOpenQuat = lidMeshNode.quaternion.clone().normalize();
+        state.lidClosedQuat = new THREE.Quaternion(); // identity = closed (for v2 export)
+        state.lidAnimT = 1; // start open
 
-      state.lidClosedQuat = state.lidOpenQuat.clone().multiply(closeDelta).normalize();
-      state.lidAnimUsesHingeFallback = false;
+        console.info('[lid] v2 direct lid animation: open -> identity on capsule_lid');
+      } else {
+
+      const getBoneQuatTrack = (clip) => {
+        if (!clip || !Array.isArray(clip.tracks)) return null;
+        return (
+          clip.tracks.find((t) =>
+            typeof t?.name === 'string' &&
+            t.name.endsWith('.quaternion') &&
+            t.name.includes('Bone_00') &&
+            !!t?.values &&
+            t.values.length >= 4
+          ) || null
+        );
+      };
+
+      const qFromTrackIndex = (track, index) => {
+        const v = track?.values;
+        if (!v || v.length < 4) return null;
+
+        const maxIndex = Math.floor(v.length / 4) - 1;
+        const idx = Math.max(0, Math.min(maxIndex, Math.floor(index)));
+        const i = idx * 4;
+        return new THREE.Quaternion(v[i], v[i + 1], v[i + 2], v[i + 3]).normalize();
+      };
+
+      const openClip =
+        clips.find((c) => /ArmatureAction$/.test(c.name || '')) ||
+        clips.find((c) => !(c.name || '').includes('Action.00')) ||
+        clips[0];
+
+      const motionClip =
+        clips.find((c) => (c.name || '').includes('Action.001')) ||
+        clips.find((c) => (c.name || '').includes('Action.002')) ||
+        clips[0];
+
+      const openTrack = getBoneQuatTrack(openClip);
+      const motionTrack = getBoneQuatTrack(motionClip);
+
+      const openFromClip = qFromTrackIndex(openTrack, (openTrack?.values?.length || 0) / 4 - 1);
+      const openFromMotionLast = qFromTrackIndex(motionTrack, (motionTrack?.values?.length || 0) / 4 - 1);
+      const closedFromMotionFirst = qFromTrackIndex(motionTrack, 0);
+
+      state.lidBoneOpenQuat = openFromClip || openFromMotionLast || boneNode.quaternion.clone();
+      boneNode.quaternion.copy(state.lidBoneOpenQuat);
+
+      let closedQuat = closedFromMotionFirst || null;
+      const clipDeltaRad = closedQuat ? state.lidBoneOpenQuat.angleTo(closedQuat) : 0;
+      const clipDeltaDeg = THREE.MathUtils.radToDeg(clipDeltaRad);
+      const clipIsUsable = !!closedQuat && clipDeltaDeg >= 20 && clipDeltaDeg <= 160;
+
+      if (clipIsUsable) {
+        // Great: use real GLB close pose
+        state.lidAnimUsesHingeFallback = false;
+        state.lidControl = boneNode;
+        state.lidOpenQuat = state.lidBoneOpenQuat.clone();
+        state.lidClosedQuat = closedQuat.normalize();
+
+        console.info('[lid] Using GLB close pose on Bone_00. clipDeltaDeg=', clipDeltaDeg.toFixed(2));
+      } else {
+        // Main fix: auto-solve closed pose (instead of guessing synthCloseDeg only)
+        state.lidAnimUsesHingeFallback = false;
+        state.lidControl = boneNode;
+        state.lidOpenQuat = state.lidBoneOpenQuat.clone();
+
+        const autoClosed = autoSolveClosedLidQuat({
+          boneNode,
+          openQuat: state.lidOpenQuat,
+          clipClosedQuat: closedQuat || null,
+          angleMinDeg: 30,
+          angleMaxDeg: 78,
+          angleStepDeg: 1,
+        });
+
+        if (autoClosed) {
+          state.lidClosedQuat = autoClosed.clone().normalize();
+          console.info('[lid] Using auto-solved synthetic close on Bone_00');
+        } else {
+          // Fallback-of-fallback
+          const rawAxis = getRawClipAxisDelta(state.lidOpenQuat, closedQuat || state.lidOpenQuat);
+          const hingeAxisLocal = snapDominantAxis(rawAxis);
+          const synthCloseDeg = 48;
+
+          const deltaClose = new THREE.Quaternion().setFromAxisAngle(
+            hingeAxisLocal,
+            THREE.MathUtils.degToRad(synthCloseDeg)
+          );
+
+          // Try both orders and choose less drift
+          const qA = state.lidOpenQuat.clone().multiply(deltaClose).normalize();
+          const qB = deltaClose.clone().multiply(state.lidOpenQuat).normalize();
+
+          const original = boneNode.quaternion.clone();
+
+          boneNode.quaternion.copy(qA);
+          state.root?.updateWorldMatrix(true, true);
+          let driftA = Infinity;
+          {
+            const boxes = computeBoxesForCapsule();
+            if (boxes) {
+              const bc = boxes.baseBox.getCenter(new THREE.Vector3());
+              const lc = boxes.lidBox.getCenter(new THREE.Vector3());
+              const dx = lc.x - bc.x;
+              const dz = lc.z - bc.z;
+              driftA = dx * dx + dz * dz;
+            }
+          }
+
+          boneNode.quaternion.copy(qB);
+          state.root?.updateWorldMatrix(true, true);
+          let driftB = Infinity;
+          {
+            const boxes = computeBoxesForCapsule();
+            if (boxes) {
+              const bc = boxes.baseBox.getCenter(new THREE.Vector3());
+              const lc = boxes.lidBox.getCenter(new THREE.Vector3());
+              const dx = lc.x - bc.x;
+              const dz = lc.z - bc.z;
+              driftB = dx * dx + dz * dz;
+            }
+          }
+
+          boneNode.quaternion.copy(original);
+          state.root?.updateWorldMatrix(true, true);
+
+          state.lidClosedQuat = (driftA <= driftB ? qA : qB);
+          console.warn(
+            '[lid] autoSolve failed, using static fallback synthCloseDeg=',
+            synthCloseDeg,
+            'axis=',
+            hingeAxisLocal.toArray(),
+            'order=',
+            driftA <= driftB ? 'post' : 'pre'
+          );
+        }
+      }
+
       state.lidAnimT = 1; // start open
-
-      console.info('[lid:v2] direct hinge-bone close animation', {
-        node: state.lidControl?.name,
-        axis: closeAxisLocal.toArray(),
-        closeAngleDeg,
-      });
+      }
     }
 
     // Re-center pivot + ground alignment after lid pose is initialized
@@ -842,7 +969,7 @@ ui.downloadBtn.addEventListener('click', () => {
 // ---------- Seal animation ----------
 function animateSealSequence() {
   const start = performance.now();
-  const duration = 2400;
+  const duration = 2300;
 
   function step(now) {
     const t = Math.min(1, (now - start) / duration);
@@ -853,11 +980,11 @@ function animateSealSequence() {
       : 1 - Math.pow(-2 * t + 2, 3) / 2;
 
     // Lid closes during ~72% of timeline
-    const lidPhase = Math.min(1, eased / 0.86);
+    const lidPhase = Math.min(1, eased / 0.72);
     state.lidAnimT = 1 - lidPhase;
 
     // Stable absolute spin angle (no rotation accumulation drift)
-    state.spinAngle = Math.sin(t * Math.PI) * 0.46;
+    state.spinAngle = Math.sin(t * Math.PI) * 0.75;
 
     if (t < 1) {
       requestAnimationFrame(step);
