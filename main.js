@@ -99,6 +99,12 @@ if ('ResizeObserver' in window) {
   viewerResizeObserver.observe(ui.viewer);
 }
 
+window.addEventListener('load', () => {
+  resize();
+  // One more pass after layout/fonts settle to avoid initial canvas crop/shift.
+  setTimeout(resize, 80);
+});
+
 // ---------- Load model ----------
 const loader = new GLTFLoader();
 let capsuleBaseMesh = null;
@@ -228,7 +234,9 @@ loader.load('./assets/time_capsule_case_v1.glb', (gltf) => {
   });
 
   // Find named nodes
-  state.capsuleLid = gltf.scene.getObjectByName('capsule_lid') || gltf.scene.getObjectByName('capsule_lid.001');
+  const lidMeshNode = gltf.scene.getObjectByName('capsule_lid');
+  const lidHingeNode = gltf.scene.getObjectByName('capsule_lid.001');
+  state.capsuleLid = lidHingeNode || lidMeshNode;
   state.capsuleBase = gltf.scene.getObjectByName('capsule_base');
   state.capsuleGroup = new THREE.Group();
   if (state.capsuleBase) state.capsuleGroup.add(state.capsuleBase.clone(false));
@@ -239,10 +247,20 @@ loader.load('./assets/time_capsule_case_v1.glb', (gltf) => {
 
   if (state.capsuleLid) {
     state.lidClosedQuat = state.capsuleLid.quaternion.clone();
-    // create a target "open" quaternion by rotating around local X (adjust if needed)
-    const delta = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI * 0.72, 0, 0));
+    // Rotate the hinge node (not the lid mesh) so the lid opens around the proper pivot.
+    // This removes the "crooked lid" look that happens when rotating the mesh itself.
+    const openAngle = -Math.PI * 0.70;
+    const hingeAxis = new THREE.Vector3(1, 0, 0);
+    const delta = new THREE.Quaternion().setFromAxisAngle(hingeAxis, openAngle);
     state.lidOpenQuat = state.lidClosedQuat.clone().multiply(delta);
-    // Start open-ish for presentation
+
+    // Small corrective roll to visually level the lid in open state for this GLB export.
+    if ((state.capsuleLid.name || '').toLowerCase().includes('capsule_lid.001')) {
+      const levelFix = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI * 0.015);
+      state.lidOpenQuat.multiply(levelFix);
+    }
+
+    // Start open for presentation
     state.capsuleLid.quaternion.copy(state.lidOpenQuat);
     state.lidAnimT = 1;
   }
