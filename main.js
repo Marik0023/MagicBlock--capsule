@@ -152,6 +152,40 @@ loader.load('./assets/time_capsule_case_v1.glb', (gltf) => {
   alert('Не вдалося завантажити 3D модель. Перевір, що сайт відкритий через локальний сервер або GitHub Pages.');
 });
 
+
+function fitCameraToCapsule() {
+  if (!state.capsuleGroup) return;
+
+  const box = new THREE.Box3().setFromObject(state.capsuleGroup);
+  if (!Number.isFinite(box.min.x) || box.isEmpty()) return;
+
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+
+  controls.target.copy(center);
+
+  const maxDim = Math.max(size.x, size.y, size.z);
+  const fov = THREE.MathUtils.degToRad(camera.fov || 45);
+  let dist = (maxDim * 0.75) / Math.tan(fov / 2);
+  dist *= 1.35;
+
+  const dir = new THREE.Vector3(1.25, 0.7, 1.5).normalize();
+  camera.position.copy(center).add(dir.multiplyScalar(dist));
+
+  // slight downward bias to keep capsule centered visually
+  camera.position.y += size.y * 0.05;
+
+  camera.near = Math.max(0.01, dist / 100);
+  camera.far = Math.max(100, dist * 20);
+  camera.updateProjectionMatrix();
+
+  if (controls) {
+    controls.minDistance = dist * 0.45;
+    controls.maxDistance = dist * 2.5;
+    controls.update();
+  }
+}
+
 function makeCanvasTexture(width, height, painter) {
   const canvas = document.createElement('canvas');
   canvas.width = width;
