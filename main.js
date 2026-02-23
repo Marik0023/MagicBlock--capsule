@@ -413,10 +413,43 @@ ui.avatarInput.addEventListener('change', async () => {
   ui.statusAvatar.textContent = 'OK';
 });
 
-ui.introForm.addEventListener('submit', (e) => {
+ui.introForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   const nick = ui.nicknameInput.value.trim();
-  if (!nick || !state.avatarDataUrl) return;
+  const pickedFile = ui.avatarInput.files?.[0] || null;
+
+  if (!nick || (!state.avatarDataUrl && !pickedFile)) {
+    alert('Введи нік і додай аватар 🫡');
+    return;
+  }
+
+  // If preview generation failed but a file is selected, read it on submit as fallback.
+  if (!state.avatarDataUrl && pickedFile) {
+    try {
+      const typeOk = ['image/png', 'image/jpeg', 'image/webp'].includes(pickedFile.type);
+      if (!typeOk) {
+        alert('Аватар має бути PNG / JPG / WEBP');
+        return;
+      }
+      if (pickedFile.size > 5 * 1024 * 1024) {
+        alert('Файл завеликий (макс 5MB)');
+        return;
+      }
+      const dataUrl = await fileToDataURL(pickedFile);
+      state.avatarDataUrl = dataUrl;
+      ui.avatarPreview.innerHTML = '';
+      const img = document.createElement('img');
+      img.src = dataUrl;
+      img.alt = 'Avatar preview';
+      ui.avatarPreview.appendChild(img);
+      ui.statusAvatar.textContent = 'OK';
+    } catch (err) {
+      console.error('Avatar fallback read error', err);
+      alert('Не вдалося прочитати аватар. Спробуй інший PNG/JPG/WebP');
+      return;
+    }
+  }
+
   state.nickname = nick;
   state.readyProfile = true;
 
