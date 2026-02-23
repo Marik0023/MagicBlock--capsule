@@ -682,6 +682,11 @@ function easeOutCubic(t) {
 
 function applyTextureOrientation(tex, kind = 'default') {
   if (!tex) return tex;
+
+  // IMPORTANT: canvases applied to GLTF meshes must use flipY=false (same as glTF textures),
+  // otherwise text/icons appear upside-down on screen_* meshes.
+  tex.flipY = false;
+
   tex.center.set(0.5, 0.5);
   tex.rotation = -Math.PI / 2; // GLB screens in this model are UV-rotated 90deg
   tex.wrapS = THREE.ClampToEdgeWrapping;
