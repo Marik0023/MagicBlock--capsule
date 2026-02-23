@@ -34,6 +34,7 @@ const state = {
   root: null,
   capsuleLid: null,
   capsuleBase: null,
+  lidControl: null,
   screens: {
     lid: null,
     name: null,
@@ -236,7 +237,14 @@ loader.load('./assets/time_capsule_case_v1.glb', (gltf) => {
   // Find named nodes
   const lidMeshNode = gltf.scene.getObjectByName('capsule_lid');
   const lidHingeNode = gltf.scene.getObjectByName('capsule_lid.001');
-  state.capsuleLid = lidHingeNode || lidMeshNode;
+  const lidBoneNode = gltf.scene.getObjectByName('Bone_00');
+
+  // IMPORTANT:
+  // - capsuleLid is used for bounds/screens (visual mesh branch)
+  // - lidControl is the node we actually rotate for open/close animation
+  //   In this GLB the correct hinge motion comes from Bone_00 (armature bone).
+  state.capsuleLid = lidMeshNode || lidHingeNode;
+  state.lidControl = lidBoneNode || lidHingeNode || lidMeshNode;
   state.capsuleBase = gltf.scene.getObjectByName('capsule_base');
   state.capsuleGroup = new THREE.Group();
   if (state.capsuleBase) state.capsuleGroup.add(state.capsuleBase.clone(false));
@@ -245,23 +253,20 @@ loader.load('./assets/time_capsule_case_v1.glb', (gltf) => {
   state.screens.name = gltf.scene.getObjectByName('screen_name');
   state.screens.avatar = gltf.scene.getObjectByName('screen_avatar');
 
-  if (state.capsuleLid) {
-    state.lidClosedQuat = state.capsuleLid.quaternion.clone();
-    // Rotate the hinge node (not the lid mesh) so the lid opens around the proper pivot.
-    // This removes the "crooked lid" look that happens when rotating the mesh itself.
-    const openAngle = -Math.PI * 0.70;
-    const hingeAxis = new THREE.Vector3(1, 0, 0);
-    const delta = new THREE.Quaternion().setFromAxisAngle(hingeAxis, openAngle);
-    state.lidOpenQuat = state.lidClosedQuat.clone().multiply(delta);
+  if (state.lidControl) {
+    // Keep the model's exported pose as the OPEN state (it matches your reference screenshot).
+    // Then animate to a CLOSED state by rotating the real armature hinge (Bone_00) around local Z.
+    state.lidOpenQuat = state.lidControl.quaternion.clone();
 
-    // Small corrective roll to visually level the lid in open state for this GLB export.
-    if ((state.capsuleLid.name || '').toLowerCase().includes('capsule_lid.001')) {
-      const levelFix = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI * 0.015);
-      state.lidOpenQuat.multiply(levelFix);
-    }
+    // ~46-48° closes the lid for this GLB while keeping the open pose perfectly straight.
+    // Using Bone_00 + local Z avoids the crooked/sideways lid issue.
+    const closeAngle = THREE.MathUtils.degToRad(-47);
+    const closeAxis = new THREE.Vector3(0, 0, 1);
+    const deltaClose = new THREE.Quaternion().setFromAxisAngle(closeAxis, closeAngle);
+    state.lidClosedQuat = state.lidOpenQuat.clone().multiply(deltaClose);
 
-    // Start open for presentation
-    state.capsuleLid.quaternion.copy(state.lidOpenQuat);
+    // Start in the natural open pose from the file
+    state.lidControl.quaternion.copy(state.lidOpenQuat);
     state.lidAnimT = 1;
   }
 
@@ -600,9 +605,9 @@ const clock = new THREE.Clock();
 function tick() {
   const dt = Math.min(clock.getDelta(), 0.05);
 
-  if (state.capsuleLid && state.lidClosedQuat && state.lidOpenQuat) {
+  if (state.lidControl && state.lidClosedQuat && state.lidOpenQuat) {
     _qTmp.copy(state.lidClosedQuat).slerp(state.lidOpenQuat, state.lidAnimT);
-    state.capsuleLid.quaternion.copy(_qTmp);
+    state.lidControl.quaternion.copy(_qTmp);
   }
 
   if (state.root) {
