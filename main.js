@@ -44,6 +44,10 @@ const state = {
   lidAnimT: 0,
   spinT: 0,
   sealAnimPlaying: false,
+  rootBasePos: null,
+  rootBaseRotY: 0,
+  idleAngle: 0,
+  sealAngle: 0,
 };
 
 // ---------- Three.js scene ----------
@@ -99,6 +103,8 @@ loader.load('./assets/time_capsule_case_v1.glb', (gltf) => {
   state.gltf = gltf;
   state.root = gltf.scene;
   scene.add(gltf.scene);
+  state.rootBasePos = gltf.scene.position.clone();
+  state.rootBaseRotY = gltf.scene.rotation.y;
 
   // Ignore embedded animations intentionally (we animate lid in code)
   // Defensive fix: remove invalid onBuild fields that can crash renderer in some exports/browser setups
@@ -428,6 +434,11 @@ function animateSealSequence() {
     state.spinT = 0;
     state.sealed = true;
     state.sealAnimPlaying = false;
+    state.sealAngle = 0;
+    if (state.root && state.rootBasePos) {
+      state.root.position.y = state.rootBasePos.y;
+      state.root.rotation.y = state.rootBaseRotY;
+    }
     ui.statusSeal.textContent = 'Sealed';
     ui.sealedOverlay.classList.remove('hidden');
     ui.downloadBtn.classList.remove('hidden');
@@ -463,14 +474,22 @@ function tick() {
   }
 
   if (state.root) {
-    // subtle idle bob before sealing
+    const t = performance.now() * 0.001;
+    const baseY = state.rootBasePos ? state.rootBasePos.y : 0;
+    const baseRotY = state.rootBaseRotY || 0;
+
+    // subtle idle bob before sealing (relative to imported transform)
     if (!state.sealed && !state.sealAnimPlaying) {
-      const t = performance.now() * 0.001;
-      state.root.rotation.y += dt * 0.18;
-      state.root.position.y = Math.sin(t * 1.1) * 0.02;
+      state.idleAngle += dt * 0.18;
+      state.root.rotation.y = baseRotY + state.idleAngle;
+      state.root.position.y = baseY + Math.sin(t * 1.1) * 0.02;
     } else if (state.sealAnimPlaying) {
-      state.root.rotation.y += dt * (1.1 + state.spinT * 2.2);
-      state.root.position.y = 0;
+      state.sealAngle += dt * (1.1 + state.spinT * 2.2);
+      state.root.rotation.y = baseRotY + state.idleAngle + state.sealAngle;
+      state.root.position.y = baseY;
+    } else {
+      state.root.position.y = baseY;
+      state.root.rotation.y = baseRotY + state.idleAngle;
     }
   }
 
