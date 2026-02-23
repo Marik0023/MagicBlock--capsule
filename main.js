@@ -286,8 +286,20 @@ loader.load('./assets/time_capsule_case_v1.glb', (gltf) => {
     const openFromMotionLast = qFromTrackIndex(motionTrack, (motionTrack?.values?.length || 0) / 4 - 1);
     const closedFromMotionFirst = qFromTrackIndex(motionTrack, 0);
 
+    // Keep the exact exported OPEN pose (this matched your reference in v4).
     state.lidOpenQuat = openFromClip || openFromMotionLast || state.lidControl.quaternion.clone();
-    state.lidClosedQuat = closedFromMotionFirst || state.lidOpenQuat.clone();
+
+    // In some exports the "closed" key we read is identical (or nearly identical) to open,
+    // so the lid appears static. Use the clip value only if it is meaningfully different;
+    // otherwise derive a closed pose from the correct hinge axis (local Z) to preserve animation.
+    let closedQuat = closedFromMotionFirst || null;
+    const sameAsOpen = !closedQuat || state.lidOpenQuat.angleTo(closedQuat) < THREE.MathUtils.degToRad(2);
+    if (sameAsOpen) {
+      const closeAngle = THREE.MathUtils.degToRad(-47);
+      const deltaClose = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), closeAngle);
+      closedQuat = state.lidOpenQuat.clone().multiply(deltaClose);
+    }
+    state.lidClosedQuat = closedQuat.normalize();
 
     // Force exact reference open pose from the GLB animation data.
     state.lidControl.quaternion.copy(state.lidOpenQuat);
