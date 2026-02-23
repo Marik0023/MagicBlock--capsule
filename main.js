@@ -180,6 +180,58 @@ loader.load('./assets/time_capsule_case_v1.glb', (gltf) => {
   alert('Не вдалося завантажити 3D модель. Перевір, що сайт відкритий через локальний сервер або GitHub Pages.');
 });
 
+
+function resetAndCenterModel(object){
+  if(!object) return;
+  object.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(object);
+  if (box.isEmpty()) return;
+  const center = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3());
+  object.position.sub(center);
+  object.position.y += size.y * 0.5;
+  object.updateMatrixWorld(true);
+}
+
+function fitObjectToView(object, controlsRef){
+  if(!object) return;
+  object.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(object);
+  if (box.isEmpty()) return;
+  const center = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3());
+  const maxSize = Math.max(size.x, size.y, size.z, 0.001);
+  const fov = (camera.fov * Math.PI) / 180;
+  const dist = Math.max((maxSize * 0.9) / Math.tan(fov / 2), 1.2);
+
+  camera.near = Math.max(0.01, dist / 200);
+  camera.far = Math.max(50, dist * 30);
+  camera.updateProjectionMatrix();
+
+  camera.position.set(center.x + dist * 0.9, center.y + dist * 0.55, center.z + dist * 1.0);
+
+  if (controlsRef) {
+    controlsRef.target.copy(center);
+    controlsRef.minDistance = dist * 0.35;
+    controlsRef.maxDistance = dist * 4;
+    controlsRef.update();
+  }
+}
+
+function findCapsuleParts(root){
+  const out = { capsuleBase:null, capsuleLid:null, screenName:null, screenAvatar:null, screenLid:null };
+  root.traverse((obj)=>{
+    const n = (obj.name || '').toLowerCase();
+    if (!n) return;
+    if (!out.capsuleBase && n.includes('capsule_base')) out.capsuleBase = obj;
+    if (!out.capsuleLid && n.includes('capsule_lid')) out.capsuleLid = obj;
+    if (!out.screenName && n.includes('screen_name')) out.screenName = obj;
+    if (!out.screenAvatar && n.includes('screen_avatar')) out.screenAvatar = obj;
+    if (!out.screenLid && n.includes('screen_lid')) out.screenLid = obj;
+  });
+  return out;
+}
+
 function makeCanvasTexture(width, height, painter) {
   const canvas = document.createElement('canvas');
   canvas.width = width;
