@@ -78,6 +78,7 @@ const state = {
   letterPropVisual: null,
   letterPropReady: false,
   letterPropLoadStarted: false,
+  letterFlightPathCache: null,
 };
 
 // ---------- Three.js scene ----------
@@ -417,32 +418,38 @@ function loadLetterPropModel() {
   );
 }
 
+
 function getButtonLaunchWorldPoint(baseCenter, baseBox, allSize) {
   const canvasRect = renderer?.domElement?.getBoundingClientRect?.();
   const btnRect = ui.sealBtn?.getBoundingClientRect?.();
 
   if (!canvasRect || !btnRect || canvasRect.width <= 2 || canvasRect.height <= 2) return null;
 
-  // Real button center in page coords (slightly above the visual center feels better).
-  // Important: do NOT require the button to be inside the 3D canvas. The button lives in the side panel.
-  let px = btnRect.left + btnRect.width * 0.50;
-  let py = btnRect.top + btnRect.height * 0.42;
+  // Button center in page coords (slightly above visual center feels nicer).
+  const px = btnRect.left + btnRect.width * 0.50;
+  const py = btnRect.top + btnRect.height * 0.45;
 
-  // Convert from page coords to the renderer's NDC. Values may go outside [-1..1] and that's OK:
-  // it makes the prop enter from the canvas edge, visually matching "launch from button".
-  const nx = ((px - canvasRect.left) / canvasRect.width) * 2 - 1;
-  const ny = -(((py - canvasRect.top) / canvasRect.height) * 2 - 1);
+  const relX = (px - canvasRect.left) / canvasRect.width;
+  const relY = (py - canvasRect.top) / canvasRect.height;
+
+  // If the button lives in the right-side panel (outside the 3D canvas), clamp the X to just outside
+  // the right edge while preserving the button's Y line. This avoids "spawning from above".
+  let nx = relX * 2 - 1;
+  if (relX > 1) nx = 1.10;
+  if (relX < 0) nx = -1.10;
+
+  const clampedRelY = THREE.MathUtils.clamp(relY, -0.15, 1.15);
+  const ny = -(clampedRelY * 2 - 1);
 
   const origin = camera.position.clone();
   const rayPoint = new THREE.Vector3(nx, ny, 0.12).unproject(camera);
   const rayDir = rayPoint.sub(origin).normalize();
 
-  // Intersect with a plane parallel to the camera, placed in front of the capsule.
   const camFwd = new THREE.Vector3();
   camera.getWorldDirection(camFwd);
 
   const camToCapsule = camera.position.distanceTo(baseCenter);
-  const targetDepth = Math.max(0.55, camToCapsule * 0.24);
+  const targetDepth = Math.max(0.55, camToCapsule * 0.22);
   const planePoint = origin.clone().addScaledVector(camFwd, targetDepth);
 
   const denom = rayDir.dot(camFwd);
@@ -453,11 +460,9 @@ function getButtonLaunchWorldPoint(baseCenter, baseBox, allSize) {
 
   const p = origin.clone().addScaledVector(rayDir, t);
 
-  // Pull a touch toward the camera to avoid accidental overlap with the lid/scene on spawn.
+  // Safety bias so the spawned letter doesn't intersect the lid on the first frame.
   p.addScaledVector(camFwd, -Math.max(0.03, allSize.y * 0.05));
-
-  // Subtle bias downwards toward button line if the projection lands too high.
-  p.y -= Math.max(0.02, allSize.y * 0.03);
+  p.y -= Math.max(0.015, allSize.y * 0.02);
 
   return p;
 }
@@ -514,23 +519,54 @@ const _letterTmpC = new THREE.Vector3();
 const _letterQuatTarget = new THREE.Quaternion();
 const _letterEulerTarget = new THREE.Euler();
 
+
 function updateLetterSealFlight(globalT) {
   const prop = state.letterProp;
   if (!prop || !state.letterPropReady) return;
 
-  // Longer, more natural sequence:
-  // 1) appear from button -> 2) side sweep -> 3) live drop into box -> 4) bounce/settle (no pop/disappear)
-  const appearAt = 0.016;
-  const sideFlyEnd = 0.34;
-  const sweepEnd = 0.49;
-  const dropEnd = 0.68;
-  const settleEnd = 0.84;
+  const path = state.letterFlightPathCache || getLetterFlightPathPoints();
+  if (!state.letterFlightPathCache) state.letterFlightPathCache = path;
+
+  const appearAt = 0.015;
+  const launchEnd = 0.34;
+  const sideEntryEnd = 0.56;
+  const dropEnd = 0.77;
+  const settleEnd = 0.90;
 
   const {
     start, c1, c2, sideApproach, sideHover,
-    entry, innerMid, land,
-    allSize, sx, sy, sz, baseSize
-  } = getLetterFlightPathPoints();
+    entry, land, baseBox, baseSize, sx, sy, sz
+  } = path;
+
+  const entryTop = new THREE.Vector3(entry.x, baseBox.max.y + Math.max(0.028, baseSize.y * 0.05), entry.z);
+
+  const sideCtrl1 = new THREE.Vector3(
+    sideApproach.x + sx * 0.08,
+    sideApproach.y + sy * 0.08,
+    sideApproach.z + sz * 0.03
+  );
+  const sideCtrl2 = new THREE.Vector3(
+    sideHover.x + sx * 0.08,
+    entryTop.y + sy * 0.02,
+    sideHover.z + sz * 0.01
+  );
+
+  const restPos = new THREE.Vector3(
+    land.x + sx * 0.02,
+    land.y,
+    land.z + sz * 0.035
+  );
+
+  const dropCtrl1 = new THREE.Vector3(
+    entryTop.x - sx * 0.03,
+    entryTop.y - Math.max(0.04, baseSize.y * 0.10),
+    entryTop.z - sz * 0.015
+  );
+  const dropCtrl2 = new THREE.Vector3(
+    restPos.x + sx * 0.02,
+    restPos.y + Math.max(0.04, baseSize.y * 0.18),
+    restPos.z + sz * 0.01
+  );
 
   if (globalT < appearAt) {
     prop.visible = false;
@@ -539,128 +575,93 @@ function updateLetterSealFlight(globalT) {
 
   prop.visible = true;
 
-  let pos = _letterTmpA;
-  let tangent = _letterTmpB.set(0, 0, -1);
-  let scaleMul = 0.80;
-  let wobble = 0.06;
-  let basePitchAdd = 0.08;
-  let baseRoll = -0.05;
+  const pos = _letterTmpA;
+  const tangent = _letterTmpB.set(0, 0, 1);
 
-  if (globalT <= sideFlyEnd) {
-    // Button -> side of capsule (visible "launch from button")
-    const p = clamp01((globalT - appearAt) / Math.max(1e-4, (sideFlyEnd - appearAt)));
-    const pe = easeInOutCubic(p);
+  let scaleMul = 0.70;
+  let basePitchAdd = 0.06;
+  let baseRoll = -0.03;
 
-    cubicBezierVec3(pos, start, c1, c2, sideApproach, pe);
+  function evalCurve(p0, p1, p2, p3, tt, outPos, outTan) {
+    const t0 = THREE.MathUtils.clamp(tt, 0, 1);
+    const t1 = THREE.MathUtils.clamp(tt + 0.02, 0, 1);
+    cubicBezierVec3(outPos, p0, p1, p2, p3, t0);
+    const pNext = _letterTmpC;
+    cubicBezierVec3(pNext, p0, p1, p2, p3, t1);
+    outTan.copy(pNext).sub(outPos);
+    if (outTan.lengthSq() < 1e-8) outTan.set(0, 0, 1);
+    outTan.normalize();
+  }
 
-    const p2 = Math.min(1, pe + 0.02);
-    cubicBezierVec3(_letterTmpC, start, c1, c2, sideApproach, p2);
-    tangent.copy(_letterTmpC).sub(pos).normalize();
-
-    const flutter = (1 - p) * 0.12 + 0.015;
-    pos.x += Math.sin(globalT * Math.PI * 2.0) * Math.max(0.0007, sx * 0.0012) * flutter;
-    pos.y += Math.sin(globalT * Math.PI * 1.8 + 0.5) * Math.max(0.0006, sy * 0.0010) * flutter;
-    pos.z += Math.cos(globalT * Math.PI * 2.2) * Math.max(0.0006, sz * 0.0010) * flutter;
-
-    scaleMul = 0.76 + p * 0.13;
-    wobble = 0.10 - p * 0.03;
-    basePitchAdd = 0.11;
-    baseRoll = -0.06;
-  } else if (globalT <= sweepEnd) {
-    // Side approach -> opening (enters from the side, not from above)
-    const p = clamp01((globalT - sideFlyEnd) / Math.max(1e-4, (sweepEnd - sideFlyEnd)));
+  if (globalT <= launchEnd) {
+    const p = clamp01((globalT - appearAt) / Math.max(1e-4, (launchEnd - appearAt)));
     const e = easeInOutCubic(p);
 
-    pos.copy(sideApproach).lerp(sideHover, e);
+    evalCurve(start, c1, c2, sideApproach, e, pos, tangent);
 
-    // A small "banking turn" and gentle drift toward the entry point
-    pos.lerp(entry, p * 0.45);
-    pos.y += Math.sin(p * Math.PI * 1.1) * Math.max(0.0008, sy * 0.0014) * (1 - p);
-    pos.z += Math.sin(p * Math.PI * 1.0 + 0.6) * Math.max(0.0007, sz * 0.0012) * (1 - p);
+    scaleMul = 0.68 + e * 0.14;
+    basePitchAdd = 0.08;
+    baseRoll = -0.025;
+  } else if (globalT <= sideEntryEnd) {
+    const p = clamp01((globalT - launchEnd) / Math.max(1e-4, (sideEntryEnd - launchEnd)));
+    const e = easeInOutCubic(p);
 
-    tangent.copy(entry).sub(sideApproach).normalize();
+    evalCurve(sideApproach, sideCtrl1, sideCtrl2, entryTop, e, pos, tangent);
 
-    scaleMul = 0.89 + p * 0.03;
-    wobble = 0.06 - p * 0.02;
-    basePitchAdd = 0.07;
-    baseRoll = -0.03 + p * 0.03;
+    scaleMul = 0.82 + e * 0.04;
+    basePitchAdd = 0.05 - e * 0.03;
+    baseRoll = -0.015 + e * 0.015;
   } else if (globalT <= dropEnd) {
-    // Live drop inside the box (no disappearance)
-    const p = clamp01((globalT - sweepEnd) / Math.max(1e-4, (dropEnd - sweepEnd)));
+    const p = clamp01((globalT - sideEntryEnd) / Math.max(1e-4, (dropEnd - sideEntryEnd)));
     const e = easeInOutCubic(p);
 
-    // Curved fall toward inside center + slight drift
-    pos.copy(entry).lerp(innerMid, e);
+    evalCurve(entryTop, dropCtrl1, dropCtrl2, restPos, e, pos, tangent);
 
-    // More alive fall (small flutter/tumble while losing energy)
-    const alive = (1 - p);
-    pos.x += Math.sin(globalT * Math.PI * 2.2 + 0.4) * Math.max(0.0005, sx * 0.0009) * alive * alive;
-    pos.z += Math.sin(globalT * Math.PI * 2.0) * Math.max(0.0005, sz * 0.0009) * alive * alive;
-    pos.y += Math.sin(p * Math.PI * 1.2) * Math.max(0.0008, sy * 0.0012) * alive * 0.20;
-
-    tangent.set(0.12, -1, 0.08).normalize();
-
-    scaleMul = 0.92 - p * 0.03;
-    wobble = 0.035 + alive * 0.02;
-    basePitchAdd = 0.01 - p * 0.08;
-    baseRoll = 0.01 + p * 0.04;
+    scaleMul = 0.86 - e * 0.02;
+    basePitchAdd = 0.01 - e * 0.16;
+    baseRoll = 0.0;
   } else if (globalT <= settleEnd) {
-    // Bounce and settle on the bottom (still visible)
     const p = clamp01((globalT - dropEnd) / Math.max(1e-4, (settleEnd - dropEnd)));
-    const e = 1 - Math.pow(1 - p, 3);
+    const e = easeInOutCubic(p);
 
-    pos.copy(innerMid).lerp(land, e);
+    pos.copy(restPos);
+    // Tiny settle only (no bounce / no wobble)
+    pos.x += (1 - e) * sx * 0.004;
+    pos.z -= (1 - e) * sz * 0.003;
 
-    // Tiny bounce that decays quickly
-    const bounce = Math.sin(p * Math.PI * 1.25) * (1 - p) * (1 - p);
-    pos.y += Math.max(0, bounce) * Math.max(0.0012, baseSize.y * 0.0025);
-
-    // Very subtle settle drift on the bottom plane
-    pos.x += Math.sin(p * Math.PI * 0.9 + 0.8) * Math.max(0.00035, sx * 0.00055) * (1 - p);
-    pos.z += Math.cos(p * Math.PI * 0.8) * Math.max(0.00035, sz * 0.00050) * (1 - p);
-
-    tangent.copy(land).sub(innerMid);
-    if (tangent.lengthSq() < 1e-5) tangent.set(0, -1, 0);
-    tangent.normalize();
-
-    scaleMul = 0.89;
-    wobble = 0.02 * (1 - p);
-    basePitchAdd = -0.10 - p * 0.05;
-    baseRoll = 0.02 * (1 - p);
+    tangent.set(0.04, 0.0, 1).normalize();
+    scaleMul = 0.84;
+    basePitchAdd = -0.16;
+    baseRoll = 0.0;
   } else {
-    // Keep the letter visible inside the box until the lid closes over it.
-    pos.copy(land);
-    tangent.set(0, 0, 1);
-    scaleMul = 0.89;
-    wobble = 0.0;
+    pos.copy(restPos);
+    tangent.set(0.04, 0.0, 1).normalize();
+    scaleMul = 0.84;
     basePitchAdd = -0.16;
     baseRoll = 0.0;
   }
 
   prop.position.copy(pos);
 
-  // Orient roughly along motion, then add a tasteful lively flutter/bank
+  // Stable orientation only (no flutter/oscillation).
   const yaw = Math.atan2(tangent.x, tangent.z);
   const pitch = -Math.atan2(tangent.y, Math.max(1e-4, Math.hypot(tangent.x, tangent.z)));
 
-  const flutterPitch = Math.sin(globalT * Math.PI * 1.6 + 0.35) * 0.006 * wobble;
-  const flutterRoll = Math.sin(globalT * Math.PI * 1.4 + 0.15) * 0.010 * wobble;
-  const flutterYaw = Math.cos(globalT * Math.PI * 1.2) * 0.005 * wobble;
-
   _letterEulerTarget.set(
-    pitch + basePitchAdd + flutterPitch,
-    yaw + Math.PI * 0.5 + flutterYaw,
-    baseRoll + flutterRoll
+    pitch + basePitchAdd,
+    yaw + Math.PI * 0.5,
+    baseRoll
   );
   _letterQuatTarget.setFromEuler(_letterEulerTarget);
+
   if (globalT <= appearAt + 0.02) {
     prop.quaternion.copy(_letterQuatTarget);
   } else {
-    prop.quaternion.slerp(_letterQuatTarget, 0.12);
+    prop.quaternion.slerp(_letterQuatTarget, 0.30);
   }
 
-  // Slightly smaller overall during flight to keep it from scraping the lid/opening.
-  prop.scale.setScalar(scaleMul * 0.76);
+  // Smaller scale to ensure clean side-entry and no lid contact.
+  prop.scale.setScalar(scaleMul * 0.70);
 }
 
 // ---------- Lid auto-solver helpers (main fix) ----------
@@ -1835,7 +1836,7 @@ ui.downloadBtn.addEventListener('click', () => {
 // ---------- Seal animation ----------
 function animateSealSequence() {
   const start = performance.now();
-  const duration = state.letterPropReady ? 7400 : 3800;
+  const duration = state.letterPropReady ? 8200 : 3800;
 
   // Keep final pose the same as before, but add a full 360° spin on top.
   const finalPoseDelta = 0; // stop facing front after full 360 spin
@@ -1844,6 +1845,7 @@ function animateSealSequence() {
 
   // Prevent user camera drag from visually "breaking" the cinematic sealing motion.
   controls.enabled = false;
+  state.letterFlightPathCache = state.letterPropReady ? getLetterFlightPathPoints() : null;
 
   function step(now) {
     const t = clamp01((now - start) / duration);
@@ -1854,13 +1856,13 @@ function animateSealSequence() {
     }
 
     // 2) Lid closes later, after the letter is clearly inside the box
-    const lidStart = state.letterPropReady ? 0.76 : 0.00;
-    const lidEnd = state.letterPropReady ? 0.97 : 0.86;
+    const lidStart = state.letterPropReady ? 0.84 : 0.00;
+    const lidEnd = state.letterPropReady ? 0.985 : 0.86;
     const lidPhase = clamp01((t - lidStart) / Math.max(1e-4, (lidEnd - lidStart)));
     state.lidAnimT = 1 - easeInOutCubic(lidPhase);
 
     // 3) Spin starts after lid motion is underway
-    const spinStart = state.letterPropReady ? 0.84 : 0.05;
+    const spinStart = state.letterPropReady ? 0.90 : 0.05;
     const spinPhase = clamp01((t - spinStart) / Math.max(1e-4, (1 - spinStart)));
     state.spinAngle = state.sealSpinTargetDelta * easeInOutCubic(spinPhase);
 
@@ -1880,6 +1882,7 @@ function animateSealSequence() {
       state.letterProp.visible = false;
       state.letterProp.scale.setScalar(1);
     }
+    state.letterFlightPathCache = null;
 
     state.sealed = true;
     state.sealAnimPlaying = false;
