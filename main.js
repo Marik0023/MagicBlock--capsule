@@ -377,7 +377,7 @@ function prepareLetterPropVisual(rootObj) {
 
   const capBox = getCapsuleBounds();
   const capSize = capBox.getSize(new THREE.Vector3());
-  const desiredMax = Math.max(0.13, Math.min(capSize.x, capSize.z) * 0.34); // reduced more to avoid lid/wall clipping
+  const desiredMax = Math.max(0.13, Math.min(capSize.x, capSize.z) * 0.355); // slightly larger for better visibility, still safe for lid/walls
 
   const s = desiredMax / maxDim;
   visual.scale.multiplyScalar(s);
@@ -595,8 +595,8 @@ function updateLetterSealFlight(globalT) {
   const motionSpinP = clamp01((Math.min(globalT, landEnd) - appearAt) / Math.max(1e-4, (landEnd - appearAt)));
   const motionSpinE = easeInOutCubic(motionSpinP);
   // Clear, slow one-way rotation in the air (visible but still calm)
-  const extraYawRad = THREE.MathUtils.degToRad(120) * motionSpinE;
-  const extraRollRad = THREE.MathUtils.degToRad(-10) * motionSpinE;
+  const extraYawRad = THREE.MathUtils.degToRad(760) * motionSpinE; // >= 2 full smooth turns before landing
+  const extraRollRad = THREE.MathUtils.degToRad(-14) * motionSpinE;
 
   function evalCurve(p0, p1, p2, p3, tt, outPos, outTan) {
     const t0 = THREE.MathUtils.clamp(tt, 0, 1);
@@ -648,7 +648,7 @@ function updateLetterSealFlight(globalT) {
   if (prop.position.y < minInsideY) prop.position.y = minInsideY;
 
   // Slightly smaller and stable scale (no pulsing)
-  prop.scale.setScalar(scaleMul * 0.82);
+  prop.scale.setScalar(scaleMul * 0.865);
 }
 
 // ---------- Lid auto-solver helpers (main fix) ----------
