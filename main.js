@@ -7,6 +7,7 @@ const ui = {
   introForm: document.getElementById('introForm'),
   nicknameInput: document.getElementById('nicknameInput'),
   avatarInput: document.getElementById('avatarInput'),
+  avatarFileName: document.getElementById('avatarFileName'),
   avatarPreview: document.getElementById('avatarPreview'),
   startBtn: document.getElementById('startBtn'),
   profileMini: document.getElementById('profileMini'),
@@ -1948,6 +1949,11 @@ function validateIntroForm() {
   ui.startBtn.disabled = !(nick.length > 0 && !!file);
 }
 
+function updateAvatarFileNameLabel() {
+  const file = ui.avatarInput.files?.[0];
+  if (ui.avatarFileName) ui.avatarFileName.textContent = file ? file.name : 'No file selected';
+}
+
 function fileToDataURL(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -1971,6 +1977,7 @@ ui.nicknameInput.addEventListener('input', () => {
 
 ui.avatarInput.addEventListener('change', async () => {
   validateIntroForm();
+  updateAvatarFileNameLabel();
 
   const file = ui.avatarInput.files?.[0];
   if (!file) return;
@@ -1979,6 +1986,7 @@ ui.avatarInput.addEventListener('change', async () => {
   if (!allowed.includes(file.type)) {
     alert('Only PNG / JPG / WEBP files are allowed');
     ui.avatarInput.value = '';
+    updateAvatarFileNameLabel();
     validateIntroForm();
     return;
   }
@@ -1986,6 +1994,7 @@ ui.avatarInput.addEventListener('change', async () => {
   if (file.size > 5 * 1024 * 1024) {
     alert('File is too large. Maximum size is 5MB');
     ui.avatarInput.value = '';
+    updateAvatarFileNameLabel();
     validateIntroForm();
     return;
   }
@@ -2070,6 +2079,8 @@ ui.messageInput.addEventListener('input', () => {
   ui.charCount.textContent = `${state.message.length} / 300`;
   ui.statusText.textContent = `${state.message.length} / 300`;
 });
+
+updateAvatarFileNameLabel();
 
 ui.sealBtn.addEventListener('click', () => {
   if (!state.readyProfile || state.sealed || state.sealAnimPlaying) return;

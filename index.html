@@ -21,15 +21,19 @@
         <form id="introForm" class="form-grid">
           <label class="field">
             <span>Nickname <b>*</b></span>
-            <input id="nicknameInput" type="text" maxlength="24" placeholder="Example: Markiian Sora" required />
+            <input id="nicknameInput" type="text" maxlength="24" placeholder="" required />
             <small id="nickHint">Recommended: up to 16 characters for a clean look on the capsule</small>
           </label>
 
-          <label class="field">
+          <div class="field">
             <span>Avatar <b>*</b></span>
-            <input id="avatarInput" type="file" accept="image/png,image/jpeg,image/webp" required />
+            <input id="avatarInput" class="sr-only-file" type="file" accept="image/png,image/jpeg,image/webp" required />
+            <label for="avatarInput" class="file-picker" aria-label="Choose avatar file">
+              <span class="file-picker-btn">Choose file</span>
+              <span id="avatarFileName" class="file-picker-name">No file selected</span>
+            </label>
             <small>PNG / JPG / WEBP, up to 5MB</small>
-          </label>
+          </div>
 
           <div class="avatar-preview-wrap">
             <div class="avatar-preview" id="avatarPreview">No avatar</div>
