@@ -845,6 +845,12 @@ function drawLockGlyph(ctx, x, y, size, progressClosed) {
 }
 
 function drawLidScreenCanvas(ctx, w, h, time) {
+  // LID SCREEN FIX: current lid UVs display text mirrored horizontally,
+  // so we pre-flip the canvas once here to make the final screen readable.
+  ctx.save();
+  ctx.translate(w, 0);
+  ctx.scale(-1, 1);
+
   drawScreenGlassBg(ctx, w, h, {
     radius: 44,
     border: 4,
@@ -903,6 +909,9 @@ function drawLidScreenCanvas(ctx, w, h, time) {
   sweep.addColorStop(1, 'rgba(255,255,255,0)');
   ctx.fillStyle = sweep;
   ctx.fillRect(barX, barY, barW, barH);
+  ctx.restore();
+
+  // restore pre-flip wrapper
   ctx.restore();
 }
 
