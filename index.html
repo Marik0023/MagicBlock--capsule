@@ -2,17 +2,20 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#04050a" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <title>Time Capsule • Cyberpunk TGE</title>
-  <!-- V-01 FIX: Real SVG favicon -->
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2307090d'/%3E%3Cellipse cx='16' cy='13' rx='7' ry='9' fill='none' stroke='%2359f0ff' stroke-width='2'/%3E%3Cellipse cx='16' cy='22' rx='7' ry='3' fill='%2359f0ff' opacity='.7'/%3E%3Crect x='9' y='13' width='14' height='9' fill='%2307090d'/%3E%3Crect x='9' y='22' width='14' height='3' rx='2' fill='%2359f0ff' opacity='.5'/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Syne:wght@700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./styles.css?v=cyberpunk-v9" />
+  <link rel="stylesheet" href="./styles.css?v=cyberpunk-v10" />
 </head>
 <body>
   <div id="app">
+
     <!-- Intro modal -->
     <div id="introModal" class="modal is-open" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
       <div class="modal-card">
@@ -29,7 +32,6 @@
 
           <div class="field">
             <span class="field-label">Avatar <b class="required">*</b></span>
-            <!-- A-01 FIX: file input label has visible focus ring via CSS -->
             <input id="avatarInput" class="sr-only-file" type="file" accept="image/png,image/jpeg,image/webp" required aria-describedby="avatarHint" />
             <label for="avatarInput" class="file-picker" tabindex="0" role="button" aria-label="Choose avatar image file">
               <span class="file-picker-icon">↑</span>
@@ -57,23 +59,26 @@
       <div class="brand brand-logo" aria-label="MagicBlock Time Capsule">
         <img src="./assets/magicblock_logo_time_capsule_with_text_BIG_transparent.png" alt="MagicBlock Time Capsule" />
       </div>
-      <div id="profileMini" class="profile-mini hidden" aria-live="polite">
-        <img id="profileMiniAvatar" alt="Your avatar" />
-        <span id="profileMiniNick"></span>
-        <span class="profile-mini-badge">ACTIVE</span>
+      <div class="topbar-right">
+        <button id="musicBtn" class="music-btn" type="button"
+                aria-label="Play ambient music" title="Toggle ambient music">
+          <span class="music-icon" aria-hidden="true">♪</span>
+        </button>
+        <div id="profileMini" class="profile-mini hidden" aria-live="polite">
+          <img id="profileMiniAvatar" alt="Your avatar" />
+          <span id="profileMiniNick"></span>
+          <span class="profile-mini-badge">ACTIVE</span>
+        </div>
       </div>
     </header>
 
     <main class="layout">
       <section class="viewer-panel" aria-label="3D capsule viewer">
-        <!-- V-05 FIX: Loading indicator while GLB fetches -->
         <div id="viewerLoading" class="viewer-loading" aria-label="Loading 3D model" role="status">
           <div class="viewer-loading-ring"></div>
           <p>Loading capsule…</p>
         </div>
-        <!-- A-02 FIX: canvas gets aria-label set by JS when appended -->
         <div id="viewer"></div>
-        <!-- A-04 FIX: sealed overlay is blocking, focus trap applied in CSS (pointer-events) -->
         <div class="viewer-overlay hidden" id="sealedOverlay" role="status" aria-live="assertive">
           <div class="viewer-overlay-card">
             <div class="seal-badge">SEALED</div>
@@ -89,7 +94,7 @@
           <h2>Message for the future</h2>
           <label class="field">
             <span class="field-label">Message <span class="char-range">(10–300 characters)</span></span>
-            <textarea id="messageInput" maxlength="300" rows="7" placeholder="Write a message sealed inside your capsule…" aria-describedby="charCount"></textarea>
+            <textarea id="messageInput" maxlength="300" rows="6" placeholder="Write a message sealed inside your capsule…" aria-describedby="charCount"></textarea>
             <div class="char-row">
               <span>Emoji supported ✅</span>
               <span id="charCount" aria-live="polite" aria-atomic="true">0 / 300</span>
@@ -126,6 +131,7 @@
       </aside>
     </main>
 
+    <!-- Feed — sits naturally below the layout, page scrolls to reach it -->
     <section class="feed-section card" aria-label="Latest sealed capsules">
       <div class="feed-head">
         <div>
@@ -142,9 +148,13 @@
       </div>
       <div id="capsuleFeedList" class="capsule-feed-list" aria-live="polite" role="list"></div>
     </section>
-  </div>
 
-  <!-- F-01 FIX: importmap aligned to v0.160.1 matching main.js import URLs -->
+  </div><!-- /#app -->
+
+  <!-- Background ambient music (generated via Web Audio API — no file needed) -->
+  
+
+  <!-- Three.js importmap (v0.160.1 — aligned with main.js imports) -->
   <script type="importmap">
     {
       "imports": {
@@ -153,6 +163,85 @@
       }
     }
   </script>
-  <script type="module" src="./main.js?v=cyberpunk-v9"></script>
+  <script type="module" src="./main.js?v=cyberpunk-v10"></script>
+
+  <!-- Ambient background music — pure Web Audio API, no files needed -->
+  
+
+  <!-- Ambient background music — pure Web Audio API, no external files needed -->
+  <script>
+  (function () {
+    var btn = document.getElementById('musicBtn');
+    if (!btn) return;
+    var AudioCtx = window.AudioContext || window.webkitAudioContext;
+    var ctx = null, master = null, playing = false;
+
+    function buildSynth() {
+      master = ctx.createGain();
+      master.gain.setValueAtTime(0.0001, ctx.currentTime);
+      master.connect(ctx.destination);
+
+      // Sine drone with gentle LFO tremolo
+      function drone(freq, amp, detune, lfoRate) {
+        var osc = ctx.createOscillator();
+        osc.type = 'sine'; osc.frequency.value = freq; osc.detune.value = detune || 0;
+        var gain = ctx.createGain(); gain.gain.value = amp;
+        var lfo = ctx.createOscillator(); lfo.frequency.value = lfoRate || 0.12;
+        var lfoG = ctx.createGain(); lfoG.gain.value = amp * 0.08;
+        lfo.connect(lfoG); lfoG.connect(gain.gain);
+        var filt = ctx.createBiquadFilter(); filt.type = 'lowpass';
+        filt.frequency.value = freq * 5; filt.Q.value = 0.7;
+        osc.connect(filt); filt.connect(gain); gain.connect(master);
+        osc.start(); lfo.start();
+      }
+
+      // A-minor ambient pad: A2 E3 A3 C4 E4 + sub
+      drone(110,  0.28,   0, 0.11);
+      drone(110,  0.13,  +7, 0.09);
+      drone(165,  0.17,  -5, 0.15);
+      drone(220,  0.20,  +3, 0.13);
+      drone(261.6,0.11,   0, 0.17);
+      drone(329.6,0.08,  -3, 0.19);
+      drone(55,   0.07,   0, 0.07);
+
+      // Shimmer bell plucks
+      [880, 1320, 1760, 2093].forEach(function(freq, i) {
+        var osc = ctx.createOscillator(); osc.type = 'sine'; osc.frequency.value = freq;
+        var env = ctx.createGain(); env.gain.value = 0;
+        var filt = ctx.createBiquadFilter(); filt.type = 'bandpass';
+        filt.frequency.value = freq; filt.Q.value = 8;
+        osc.connect(filt); filt.connect(env); env.connect(master); osc.start();
+        var period = [7.2, 9.8, 12.5, 15.1][i];
+        var nextT = ctx.currentTime + i * 1.8;
+        (function tick() {
+          var lookahead = ctx.currentTime + 6;
+          while (nextT < lookahead) {
+            var peak = 0.032 + Math.random() * 0.022;
+            env.gain.setValueAtTime(0, nextT);
+            env.gain.linearRampToValueAtTime(peak, nextT + 0.1);
+            env.gain.exponentialRampToValueAtTime(0.0001, nextT + 2.4);
+            nextT += period + (Math.random() - 0.5) * period * 0.2;
+          }
+          setTimeout(tick, 2500);
+        })();
+      });
+    }
+
+    btn.addEventListener('click', function () {
+      if (!ctx) { ctx = new AudioCtx(); buildSynth(); }
+      if (ctx.state === 'suspended') ctx.resume();
+      playing = !playing;
+      master.gain.cancelScheduledValues(ctx.currentTime);
+      master.gain.setValueAtTime(master.gain.value, ctx.currentTime);
+      master.gain.linearRampToValueAtTime(
+        playing ? 0.55 : 0.0001,
+        ctx.currentTime + (playing ? 3.5 : 2.0)
+      );
+      btn.classList.toggle('playing', playing);
+      btn.setAttribute('aria-label', playing ? 'Pause ambient music' : 'Play ambient music');
+      btn.querySelector('.music-icon').textContent = playing ? '♫' : '♪';
+    });
+  })();
+  </script>
 </body>
 </html>
