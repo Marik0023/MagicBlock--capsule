@@ -95,13 +95,15 @@ const state = {
 
   // prevent duplicate public feed inserts in one session
   _feedSavedOnce: false,
+  // cached PNG data URL captured immediately after seal animation
+  _sealedPngDataUrl: null,
 };
 
 const MIN_MESSAGE_CHARS = 10;
 const CAPSULE_STORAGE_KEY = 'magicblock_time_capsule_state_v1';
 
 function getTrimmedMessageLength(value = state.message) {
-  return String(value || '').trim().length;
+  return Array.from(String(value || '').trim()).length;
 }
 
 function canSealCapsule() {
@@ -120,6 +122,11 @@ function setSealedOverlayVisible(visible, { showOk = false, blocking = false } =
 
   if (ui.overlayOkBtn) {
     ui.overlayOkBtn.classList.toggle('hidden', !showOk);
+  }
+
+  // A-04 FIX: move focus into overlay when blocking so keyboard users can't tab behind it
+  if (visible && blocking && showOk && ui.overlayOkBtn) {
+    setTimeout(() => ui.overlayOkBtn.focus(), 50);
   }
 }
 
@@ -141,6 +148,7 @@ function persistCapsuleState() {
       if ((e && e.name === 'QuotaExceededError') || /quota/i.test(String(e))) {
         payload.avatarDataUrl = '';
         localStorage.setItem(CAPSULE_STORAGE_KEY, JSON.stringify(payload));
+        showToast('Avatar too large to save locally — you\'ll need to re-upload on next visit.', 'warning');
       } else {
         throw e;
       }
@@ -214,8 +222,8 @@ function applyPersistedCapsuleState(saved) {
 
   state.overlayDismissedOnSealed = !!saved.overlayDismissedOnSealed;
 
-  ui.charCount.textContent = `${state.message.length} / 300`;
-  ui.statusText.textContent = `${state.message.length} / 300`;
+  ui.charCount.textContent = `${Array.from(state.message).length} / 300`;
+  ui.statusText.textContent = `${Array.from(state.message).length} / 300`;
 
   if (saved.sealed) {
     state.sealed = true;
@@ -252,6 +260,9 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.0;
 ui.viewer.appendChild(renderer.domElement);
+// A-02 FIX: give the canvas an accessible description
+renderer.domElement.setAttribute('aria-label', 'Interactive 3D time capsule — drag to rotate');
+renderer.domElement.setAttribute('role', 'img');
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
@@ -987,6 +998,10 @@ const loader = new GLTFLoader();
 loader.load(
   './assets/time_capsule_case_v2.glb',
   (gltf) => {
+    // Remove loading indicator when model is ready
+    const loadingEl = document.getElementById('viewerLoading');
+    if (loadingEl) loadingEl.remove();
+
     state.gltf = gltf;
     state.root = gltf.scene;
     scene.add(gltf.scene);
@@ -1217,7 +1232,13 @@ loader.load(
   undefined,
   (err) => {
     console.error('GLB load error', err);
-    alert('Failed to load the 3D model. Make sure the site is opened via a local server or GitHub Pages.');
+    const viewer = document.getElementById('viewer');
+    if (viewer) {
+      const errEl = document.createElement('div');
+      errEl.className = 'viewer-load-error';
+      errEl.innerHTML = '<span>⚠</span><p>3D model failed to load.</p><small>Try refreshing the page.</small>';
+      viewer.appendChild(errEl);
+    }
   }
 );
 
@@ -2186,9 +2207,9 @@ function renderCapsuleFeed(items = []) {
   ui.capsuleFeedEmpty.classList.add('hidden');
   ui.capsuleFeedList.innerHTML = items.map((row) => `
     <div class="feed-row">
-      <img class="feed-avatar" src="${escapeHtml(row.avatar_url || '')}" alt="avatar of ${escapeHtml(row.nickname || 'user')}" loading="lazy" />
+      <img class="feed-avatar" src="${escapeHtml(row.avatar_url || '')}" alt="avatar of ${escapeHtml(row.nickname || 'user')}" loading="lazy" onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2244%22 height=%2244%22 viewBox=%220 0 44 44%22%3E%3Crect width=%2244%22 height=%2244%22 rx=%2222%22 fill=%22%23182030%22/%3E%3Ccircle cx=%2222%22 cy=%2218%22 r=%228%22 fill=%22%23334466%22/%3E%3Cellipse cx=%2222%22 cy=%2236%22 rx=%2213%22 ry=%228%22 fill=%22%23334466%22/%3E%3C/svg%3E'" />
       <div class="feed-nick" title="${escapeHtml(row.nickname || '')}">${escapeHtml(row.nickname || 'Unknown')}</div>
-      <img class="feed-box" src="${escapeHtml(row.box_thumb_url || '')}" alt="sealed capsule thumbnail" loading="lazy" />
+      <img class="feed-box" src="${escapeHtml(row.box_thumb_url || '')}" alt="sealed capsule thumbnail" loading="lazy" onerror="this.style.opacity='0.3'" />
       <div class="feed-date">${escapeHtml(formatFeedDate(row.sealed_at || row.created_at))}</div>
     </div>
   `).join('');
@@ -2197,6 +2218,7 @@ function renderCapsuleFeed(items = []) {
 async function loadCapsuleFeed() {
   if (!ui.capsuleFeedList || !ui.capsuleFeedEmpty) return;
 
+  if (ui.refreshFeedBtn) ui.refreshFeedBtn.disabled = true;
   try {
     const { data, error } = await supabase
       .from('capsule_feed')
@@ -2209,7 +2231,26 @@ async function loadCapsuleFeed() {
   } catch (err) {
     console.error('[capsule_feed] load failed', err);
     renderCapsuleFeed([]);
+  } finally {
+    if (ui.refreshFeedBtn) ui.refreshFeedBtn.disabled = false;
   }
+}
+
+function showToast(message, type = 'info') {
+  const existing = document.getElementById('toastNotification');
+  if (existing) existing.remove();
+
+  const toast = document.createElement('div');
+  toast.id = 'toastNotification';
+  toast.className = `toast toast-${type}`;
+  toast.textContent = message;
+  document.body.appendChild(toast);
+
+  requestAnimationFrame(() => toast.classList.add('toast-visible'));
+  setTimeout(() => {
+    toast.classList.remove('toast-visible');
+    setTimeout(() => toast.remove(), 400);
+  }, 4000);
 }
 
 async function saveCapsuleFeedEntry() {
@@ -2251,6 +2292,7 @@ async function saveCapsuleFeedEntry() {
   } catch (err) {
     state._feedSavedOnce = false;
     console.error('[capsule_feed] save failed', err);
+    showToast('Could not save to the public feed. Tap Refresh to retry.', 'error');
   }
 }
 
@@ -2266,7 +2308,7 @@ ui.avatarInput.addEventListener('change', async () => {
   const file = ui.avatarInput.files?.[0];
   if (!file) return;
 
-  const allowed = ['image/png', 'image/jpeg', 'image/webp'];
+  const allowed = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp'];
   if (!allowed.includes(file.type)) {
     alert('Only PNG / JPG / WEBP files are allowed');
     ui.avatarInput.value = '';
@@ -2316,7 +2358,7 @@ ui.introForm.addEventListener('submit', async (e) => {
 
   if (!state.avatarDataUrl && pickedFile) {
     try {
-      const typeOk = ['image/png', 'image/jpeg', 'image/webp'].includes(pickedFile.type);
+      const typeOk = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp'].includes(pickedFile.type);
       if (!typeOk) {
         alert('Avatar must be PNG / JPG / WEBP');
         return;
@@ -2364,8 +2406,9 @@ ui.introForm.addEventListener('submit', async (e) => {
 
 ui.messageInput.addEventListener('input', () => {
   state.message = ui.messageInput.value;
-  ui.charCount.textContent = `${state.message.length} / 300`;
-  ui.statusText.textContent = `${state.message.length} / 300`;
+  const len = Array.from(state.message).length;
+  ui.charCount.textContent = `${len} / 300`;
+  ui.statusText.textContent = `${len} / 300`;
   persistCapsuleState();
   updateSealButtonState();
 });
@@ -2403,7 +2446,7 @@ ui.sealBtn.addEventListener('click', () => {
 
 ui.downloadBtn.addEventListener('click', () => {
   const a = document.createElement('a');
-  a.href = renderer.domElement.toDataURL('image/png');
+  a.href = state._sealedPngDataUrl || renderer.domElement.toDataURL('image/png');
   a.download = `time-capsule-${slugify(state.nickname || 'user')}.png`;
   a.click();
 });
@@ -2470,6 +2513,8 @@ function animateSealSequence() {
     state.sealed = true;
     state.sealAnimPlaying = false;
     state.overlayDismissedOnSealed = false;
+    // Cache the PNG immediately after sealing so download is reliable regardless of GL state later
+    state._sealedPngDataUrl = renderer.domElement.toDataURL('image/png');
 
     controls.enabled = true;
     ui.statusSeal.textContent = 'Sealed';

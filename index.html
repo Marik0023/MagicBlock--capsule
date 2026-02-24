@@ -4,42 +4,51 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Time Capsule • Cyberpunk TGE</title>
-  <link rel="icon" href="data:,">
+  <!-- V-01 FIX: Real SVG favicon -->
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2307090d'/%3E%3Cellipse cx='16' cy='13' rx='7' ry='9' fill='none' stroke='%2359f0ff' stroke-width='2'/%3E%3Cellipse cx='16' cy='22' rx='7' ry='3' fill='%2359f0ff' opacity='.7'/%3E%3Crect x='9' y='13' width='14' height='9' fill='%2307090d'/%3E%3Crect x='9' y='22' width='14' height='3' rx='2' fill='%2359f0ff' opacity='.5'/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./styles.css?v=cyberpunk-en-v8" />
-  <link rel="icon" href="data:,">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Syne:wght@700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./styles.css?v=cyberpunk-v9" />
 </head>
 <body>
   <div id="app">
+    <!-- Intro modal -->
     <div id="introModal" class="modal is-open" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
       <div class="modal-card">
-        <h1 id="modalTitle">Prepare Your Time Capsule</h1>
-        <p class="muted">First, enter your nickname and upload an avatar. You can't continue without it.</p>
+        <div class="modal-eyebrow">INITIALIZE CAPSULE</div>
+        <h1 id="modalTitle">Prepare Your<br><em class="gradient-text">Time Capsule</em></h1>
+        <p class="muted">Enter your nickname and upload an avatar to continue.</p>
 
         <form id="introForm" class="form-grid">
           <label class="field">
-            <span>Nickname <b>*</b></span>
-            <input id="nicknameInput" type="text" maxlength="24" placeholder="" required />
-            <small id="nickHint">Recommended: up to 16 characters for a clean look on the capsule</small>
+            <span class="field-label">Nickname <b class="required">*</b></span>
+            <input id="nicknameInput" type="text" maxlength="24" placeholder="Enter nickname…" required autocomplete="off" />
+            <small id="nickHint">Up to 16 characters recommended</small>
           </label>
 
           <div class="field">
-            <span>Avatar <b>*</b></span>
-            <input id="avatarInput" class="sr-only-file" type="file" accept="image/png,image/jpeg,image/webp" required />
-            <label for="avatarInput" class="file-picker" aria-label="Choose avatar file">
+            <span class="field-label">Avatar <b class="required">*</b></span>
+            <!-- A-01 FIX: file input label has visible focus ring via CSS -->
+            <input id="avatarInput" class="sr-only-file" type="file" accept="image/png,image/jpeg,image/webp" required aria-describedby="avatarHint" />
+            <label for="avatarInput" class="file-picker" tabindex="0" role="button" aria-label="Choose avatar image file">
+              <span class="file-picker-icon">↑</span>
               <span class="file-picker-btn">Choose file</span>
               <span id="avatarFileName" class="file-picker-name">No file selected</span>
             </label>
-            <small>PNG / JPG / WEBP, up to 5MB</small>
+            <small id="avatarHint">PNG / JPG / WEBP, up to 5MB</small>
           </div>
 
           <div class="avatar-preview-wrap">
-            <div class="avatar-preview" id="avatarPreview">No avatar</div>
+            <div class="avatar-preview" id="avatarPreview" aria-label="Avatar preview">
+              <span class="avatar-placeholder-text">NO AVATAR</span>
+            </div>
           </div>
 
-          <button id="startBtn" class="btn btn-primary" type="submit" disabled>Continue</button>
+          <button id="startBtn" class="btn btn-primary" type="submit" disabled>
+            <span>Initialize Capsule</span>
+            <span class="btn-arrow">→</span>
+          </button>
         </form>
       </div>
     </div>
@@ -48,16 +57,24 @@
       <div class="brand brand-logo" aria-label="MagicBlock Time Capsule">
         <img src="./assets/magicblock_logo_time_capsule_with_text_BIG_transparent.png" alt="MagicBlock Time Capsule" />
       </div>
-      <div id="profileMini" class="profile-mini hidden">
-        <img id="profileMiniAvatar" alt="avatar" />
+      <div id="profileMini" class="profile-mini hidden" aria-live="polite">
+        <img id="profileMiniAvatar" alt="Your avatar" />
         <span id="profileMiniNick"></span>
+        <span class="profile-mini-badge">ACTIVE</span>
       </div>
     </header>
 
     <main class="layout">
-      <section class="viewer-panel">
+      <section class="viewer-panel" aria-label="3D capsule viewer">
+        <!-- V-05 FIX: Loading indicator while GLB fetches -->
+        <div id="viewerLoading" class="viewer-loading" aria-label="Loading 3D model" role="status">
+          <div class="viewer-loading-ring"></div>
+          <p>Loading capsule…</p>
+        </div>
+        <!-- A-02 FIX: canvas gets aria-label set by JS when appended -->
         <div id="viewer"></div>
-        <div class="viewer-overlay hidden" id="sealedOverlay">
+        <!-- A-04 FIX: sealed overlay is blocking, focus trap applied in CSS (pointer-events) -->
+        <div class="viewer-overlay hidden" id="sealedOverlay" role="status" aria-live="assertive">
           <div class="viewer-overlay-card">
             <div class="seal-badge">SEALED</div>
             <p>Capsule sealed until TGE</p>
@@ -66,57 +83,76 @@
         </div>
       </section>
 
-      <aside class="side-panel">
+      <aside class="side-panel" aria-label="Capsule controls">
         <div class="card">
+          <div class="card-eyebrow">MESSAGE</div>
           <h2>Message for the future</h2>
           <label class="field">
-            <span>Message (10–300 characters)</span>
-            <textarea id="messageInput" maxlength="300" minlength="10" rows="7" placeholder="Write a message that will stay inside the capsule..."></textarea>
-            <div class="char-row"><span>Emoji supported ✅</span><span id="charCount">0 / 300</span></div>
+            <span class="field-label">Message <span class="char-range">(10–300 characters)</span></span>
+            <textarea id="messageInput" maxlength="300" rows="7" placeholder="Write a message sealed inside your capsule…" aria-describedby="charCount"></textarea>
+            <div class="char-row">
+              <span>Emoji supported ✅</span>
+              <span id="charCount" aria-live="polite" aria-atomic="true">0 / 300</span>
+            </div>
           </label>
 
           <div class="until-box">
-            <div class="until-title">Until the...</div>
+            <div class="until-title">SEALED UNTIL</div>
             <div class="until-value">TGE</div>
             <div class="until-note">Open date will be revealed later</div>
           </div>
 
           <div class="actions">
-            <button id="sealBtn" class="btn btn-primary" disabled>Seal Capsule</button>
-            <button id="downloadBtn" class="btn btn-ghost hidden" type="button">Download image</button>
+            <button id="sealBtn" class="btn btn-primary btn-seal" disabled>
+              <span>Seal Capsule</span>
+              <span class="seal-icon">🔒</span>
+            </button>
+            <button id="downloadBtn" class="btn btn-ghost hidden" type="button" aria-label="Download capsule image as PNG">
+              <span>⬇ Download</span>
+            </button>
           </div>
         </div>
 
         <div class="card compact">
-          <h3>Status</h3>
-          <ul class="status-list">
-            <li><span>Nickname</span><b id="statusNick">—</b></li>
-            <li><span>Avatar</span><b id="statusAvatar">—</b></li>
-            <li><span>Message</span><b id="statusText">0 / 300</b></li>
-            <li><span>Capsule</span><b id="statusSeal">Open</b></li>
+          <div class="card-eyebrow">STATUS</div>
+          <h3>Capsule Status</h3>
+          <ul class="status-list" role="list">
+            <li role="listitem"><span>Nickname</span><b id="statusNick">—</b></li>
+            <li role="listitem"><span>Avatar</span><b id="statusAvatar">—</b></li>
+            <li role="listitem"><span>Message</span><b id="statusText">0 / 300</b></li>
+            <li role="listitem"><span>Capsule</span><b id="statusSeal">Open</b></li>
           </ul>
         </div>
       </aside>
     </main>
 
-    <section class="feed-section card">
+    <section class="feed-section card" aria-label="Latest sealed capsules">
       <div class="feed-head">
-        <h2>Latest sealed capsules</h2>
-        <button id="refreshFeedBtn" class="btn btn-ghost" type="button">Refresh</button>
+        <div>
+          <div class="card-eyebrow">COMMUNITY</div>
+          <h2>Latest Sealed Capsules</h2>
+        </div>
+        <button id="refreshFeedBtn" class="btn btn-ghost btn-sm" type="button" aria-label="Refresh capsule feed">
+          <span class="refresh-icon">↻</span> Refresh
+        </button>
       </div>
-      <div id="capsuleFeedEmpty" class="feed-empty">No sealed capsules yet</div>
-      <div id="capsuleFeedList" class="capsule-feed-list" aria-live="polite"></div>
+      <div id="capsuleFeedEmpty" class="feed-empty">
+        <div class="feed-empty-icon">◎</div>
+        <p>No sealed capsules yet — be the first!</p>
+      </div>
+      <div id="capsuleFeedList" class="capsule-feed-list" aria-live="polite" role="list"></div>
     </section>
   </div>
 
+  <!-- F-01 FIX: importmap aligned to v0.160.1 matching main.js import URLs -->
   <script type="importmap">
     {
       "imports": {
-        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        "three": "https://unpkg.com/three@0.160.1/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.1/examples/jsm/"
       }
     }
   </script>
-  <script type="module" src="./main.js?v=cyberpunk-en-v8"></script>
+  <script type="module" src="./main.js?v=cyberpunk-v9"></script>
 </body>
 </html>
