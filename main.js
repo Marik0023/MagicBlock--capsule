@@ -950,6 +950,125 @@ function drawLockGlyph(ctx, x, y, size, progressClosed) {
   ctx.fillRect(x - size * 0.03, bodyY + bodyH * 0.42, size * 0.06, size * 0.15);
 }
 
+function drawScreenHardwareOverlay(ctx, w, h, opts = {}) {
+  const accent = opts.accent || '#69f2cf';
+  const title = String(opts.title || 'SYS').toUpperCase();
+  const showOk = !!opts.showOk;
+  const pad = opts.pad ?? 8;
+  const x = pad, y = pad, ww = w - pad * 2, hh = h - pad * 2;
+  const r = Math.max(10, Math.min(w, h) * 0.09);
+
+  ctx.save();
+  roundRect(ctx, x, y, ww, hh, r);
+  ctx.strokeStyle = rgbaHex(accent, 0.12);
+  ctx.lineWidth = 4;
+  ctx.stroke();
+
+  roundRect(ctx, x + 1.5, y + 1.5, ww - 3, hh - 3, Math.max(8, r - 2));
+  const bezelG = ctx.createLinearGradient(x, y, x + ww, y + hh);
+  bezelG.addColorStop(0, 'rgba(255,255,255,0.14)');
+  bezelG.addColorStop(0.5, 'rgba(16,24,40,0.08)');
+  bezelG.addColorStop(1, rgbaHex(accent, 0.18));
+  ctx.strokeStyle = bezelG;
+  ctx.lineWidth = 1.6;
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(x + 16, y + 16);
+  ctx.lineTo(x + ww - 16, y + 16);
+  ctx.strokeStyle = 'rgba(120,170,255,0.10)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  const pillX = x + 14, pillY = y + 9, pillW = Math.min(56, ww * 0.24), pillH = 12;
+  roundRect(ctx, pillX, pillY, pillW, pillH, 6);
+  const pillGrad = ctx.createLinearGradient(pillX, pillY, pillX + pillW, pillY);
+  pillGrad.addColorStop(0, rgbaHex(accent, 0.28));
+  pillGrad.addColorStop(1, 'rgba(255,255,255,0.05)');
+  ctx.fillStyle = pillGrad;
+  ctx.fill();
+  ctx.strokeStyle = rgbaHex(accent, 0.35);
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.fillStyle = 'rgba(226,244,255,0.9)';
+  ctx.font = '700 7px Inter, sans-serif';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(title.slice(0, 8), pillX + 6, pillY + pillH / 2 + 0.5);
+
+  const btnCols = ['rgba(255,88,122,0.95)', 'rgba(255,210,84,0.95)', rgbaHex(accent, 0.95)];
+  btnCols.forEach((col, i) => {
+    const cx = x + ww - 18 - i * 10;
+    const cy = y + 15;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 2.2, 0, Math.PI * 2);
+    ctx.fillStyle = col;
+    ctx.shadowColor = col;
+    ctx.shadowBlur = 6;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+  });
+
+  const railX = x + ww - 8;
+  const railY = y + hh * 0.27;
+  for (let i = 0; i < 3; i++) {
+    const by = railY + i * 18;
+    roundRect(ctx, railX, by, 7, 12, 3);
+    ctx.fillStyle = 'rgba(8,12,20,0.76)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.10)';
+    ctx.lineWidth = 0.8;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(railX + 2, by + 6);
+    ctx.lineTo(railX + 5, by + 6);
+    ctx.strokeStyle = rgbaHex(accent, 0.7);
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+
+  ctx.strokeStyle = rgbaHex(accent, 0.34);
+  ctx.lineWidth = 1.1;
+  const c = 10;
+  [[x + 10, y + 10, 1, 1], [x + ww - 10, y + 10, -1, 1], [x + 10, y + hh - 10, 1, -1], [x + ww - 10, y + hh - 10, -1, -1]].forEach(([cx, cy, sx, sy]) => {
+    ctx.beginPath();
+    ctx.moveTo(cx, cy + sy * c);
+    ctx.lineTo(cx, cy);
+    ctx.lineTo(cx + sx * c, cy);
+    ctx.stroke();
+  });
+
+  if (showOk) {
+    const ow = 30, oh = 13;
+    const ox = x + ww - ow - 16;
+    const oy = y + hh - oh - 10;
+    roundRect(ctx, ox, oy, ow, oh, 6);
+    ctx.fillStyle = 'rgba(8,14,22,0.82)';
+    ctx.fill();
+    ctx.strokeStyle = rgbaHex(accent, 0.42);
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.fillStyle = rgbaHex(accent, 0.88);
+    ctx.font = '700 8px Inter, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('OK', ox + ow / 2, oy + oh / 2 + 0.5);
+  }
+
+  const dx = x + 16, dy = y + hh - 14;
+  [rgbaHex(accent, 0.95), 'rgba(100,175,255,0.55)', 'rgba(255,255,255,0.22)'].forEach((col, i) => {
+    ctx.beginPath();
+    ctx.arc(dx + i * 8, dy, 1.4, 0, Math.PI * 2);
+    ctx.fillStyle = col;
+    ctx.shadowColor = col;
+    ctx.shadowBlur = i === 0 ? 6 : 0;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+  });
+
+  ctx.restore();
+}
+
 function drawLidScreenCanvas(ctx, w, h, time) {
   // LID SCREEN FIX: current lid UVs display text mirrored horizontally,
   // so we pre-flip the canvas once here to make the final screen readable.
@@ -1079,7 +1198,9 @@ function drawLidScreenCanvas(ctx, w, h, time) {
   ctx.fillRect(barX, barY, barW, barH);
   ctx.restore();
 
-  ctx.restore();
+    drawScreenHardwareOverlay(ctx, w, h, { accent: state.sealed ? '#8cc8ff' : '#66f2d1', title: state.sealed ? 'LOCK' : 'SEC', showOk: !state.sealed });
+
+ctx.restore();
 }
 
 function drawNameScreenCanvas(ctx, w, h, time) {
@@ -1177,7 +1298,9 @@ function drawNameScreenCanvas(ctx, w, h, time) {
   ctx.fillStyle = 'rgba(160,255,224,0.95)';
   ctx.beginPath(); ctx.arc(ledX, ledY, 2.8, 0, Math.PI * 2); ctx.fill();
 
-  ctx.restore();
+    drawScreenHardwareOverlay(ctx, w, h, { accent: '#44c8ff', title: 'ID', showOk: true });
+
+ctx.restore();
 }
 
 function drawAvatarScreenCanvas(ctx, w, h, time) {
@@ -1272,6 +1395,8 @@ function drawAvatarScreenCanvas(ctx, w, h, time) {
   ctx.restore();
 
   ctx.restore();
+
+  drawScreenHardwareOverlay(ctx, w, h, { accent: '#6ac6ff', title: 'CAM', showOk: true });
 
   // Outer corner brackets + markers
   ctx.strokeStyle = 'rgba(165,236,255,0.50)';
