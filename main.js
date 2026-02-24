@@ -591,6 +591,12 @@ function updateLetterSealFlight(globalT) {
 
   let scaleMul = 0.60;
 
+  // One-way slow rotation layered on top of the base orientation (no wobble / no back-and-forth).
+  const motionSpinP = clamp01((Math.min(globalT, landEnd) - appearAt) / Math.max(1e-4, (landEnd - appearAt)));
+  const motionSpinE = easeInOutCubic(motionSpinP);
+  const extraYawRad = THREE.MathUtils.degToRad(28) * motionSpinE;
+  const extraRollRad = THREE.MathUtils.degToRad(-5) * motionSpinE;
+
   function evalCurve(p0, p1, p2, p3, tt, outPos, outTan) {
     const t0 = THREE.MathUtils.clamp(tt, 0, 1);
     const t1 = THREE.MathUtils.clamp(tt + 0.012, 0, 1);
@@ -626,6 +632,11 @@ function updateLetterSealFlight(globalT) {
     prop.quaternion.copy(qLand);
   }
 
+  // Apply a deterministic, smooth spin while the letter travels to the box.
+  _letterEulerTarget.set(0, extraYawRad, extraRollRad);
+  _letterQuatTarget.setFromEuler(_letterEulerTarget);
+  prop.quaternion.multiply(_letterQuatTarget);
+
   prop.position.copy(pos);
 
   // Keep a tiny safety floor inside the box to avoid z-fighting/penetration illusion.
@@ -633,7 +644,7 @@ function updateLetterSealFlight(globalT) {
   if (prop.position.y < minInsideY) prop.position.y = minInsideY;
 
   // Slightly smaller and stable scale (no pulsing)
-  prop.scale.setScalar(scaleMul * 0.66);
+  prop.scale.setScalar(scaleMul * 0.72);
 }
 
 // ---------- Lid auto-solver helpers (main fix) ----------
