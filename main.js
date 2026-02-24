@@ -701,9 +701,12 @@ function applyTextureOrientation(tex, kind = 'default') {
   // Lid screen UV in this GLB is mirrored relative to side screens.
   // IMPORTANT: negative repeat requires RepeatWrapping (with Clamp it can sample edge color -> blank screen on some GPUs).
   if (kind === 'lid') {
+    // Lid UV is mirrored on both axes in this GLB compared to side screens.
+    // Using RepeatWrapping avoids edge sampling artifacts with negative repeat.
     tex.wrapS = THREE.RepeatWrapping;
-    tex.repeat.x = -1;
-    tex.offset.x = 1;
+    tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(-1, -1);
+    tex.offset.set(1, 1);
   }
 
   tex.needsUpdate = true;
@@ -1416,7 +1419,7 @@ function animateSealSequence() {
   const duration = 3600; // довше і плавніше
 
   // Keep final pose the same as before, but add a full 360° spin on top.
-  const finalPoseDelta = Math.PI * 0.92;
+  const finalPoseDelta = 0; // stop facing front after full 360 spin
   state.sealSpinTargetDelta = Math.PI * 2 + finalPoseDelta;
   state.sealSpinCommitted = false;
 
