@@ -18,7 +18,6 @@ const ui = {
   sealBtn: document.getElementById('sealBtn'),
   downloadBtn: document.getElementById('downloadBtn'),
   sealedOverlay: document.getElementById('sealedOverlay'),
-  sealedViewBtn: document.getElementById('sealedViewBtn'),
   statusNick: document.getElementById('statusNick'),
   statusAvatar: document.getElementById('statusAvatar'),
   statusText: document.getElementById('statusText'),
@@ -57,16 +56,22 @@ const state = {
   sealAnimPlaying: false,
 
   rootBaseY: 0,
-  rootBaseRotX: 0,
   rootBaseRotY: 0,
-  rootBaseRotZ: 0,
   spinAngle: 0,
-  sealProgress: 0,
-  screenSurfaces: null,
-  screenAnimTime: 0,
-  lastScreenPaintAt: 0,
-  avatarImg: null,
-  avatarImgSrc: '',
+
+  // one-way spin during seal (avoid "туда-сюда")
+  sealSpinTargetDelta: 0,
+  sealSpinCommitted: false,
+
+  // dynamic screen canvases / effects
+  screenFx: {
+    lid: null,
+    name: null,
+    avatar: null,
+  },
+  avatarImgEl: null,
+  avatarImgLoaded: false,
+  lastScreenFxDraw: 0,
 };
 
 // ---------- Three.js scene ----------
@@ -84,7 +89,7 @@ const renderer = new THREE.WebGLRenderer({
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.02;
+renderer.toneMappingExposure = 1.0;
 ui.viewer.appendChild(renderer.domElement);
 
 const controls = new OrbitControls(camera, renderer.domElement);
@@ -96,24 +101,41 @@ controls.enablePan = false;
 controls.maxPolarAngle = Math.PI * 0.52;
 controls.minPolarAngle = Math.PI * 0.18;
 
-scene.add(new THREE.AmbientLight(0xeaf2ff, 0.68));
-const hemiLight = new THREE.HemisphereLight(0x9dd6ff, 0x0a0d14, 0.55);
-scene.add(hemiLight);
+scene.add(new THREE.AmbientLight(0xffffff, 0.5));
 
-const keyLight = new THREE.DirectionalLight(0xbfe7ff, 0.95);
-keyLight.position.set(3, 4, 2);
+const hemi = new THREE.HemisphereLight(0xb7deff, 0x090d16, 0.75);
+scene.add(hemi);
+
+const keyLight = new THREE.DirectionalLight(0xd8eeff, 0.72);
+keyLight.position.set(3.8, 4.6, 2.6);
 scene.add(keyLight);
 
-const rimLight = new THREE.DirectionalLight(0x7f8fff, 0.52);
-rimLight.position.set(-3, 2, -3);
+const rimLight = new THREE.DirectionalLight(0x7f92ff, 0.46);
+rimLight.position.set(-4.2, 2.7, -3.8);
 scene.add(rimLight);
+
+const accentLightA = new THREE.PointLight(0x74e3ff, 0.28, 14);
+accentLightA.position.set(3.1, 1.9, -2.6);
+scene.add(accentLightA);
+
+const accentLightB = new THREE.PointLight(0x8a96ff, 0.24, 16);
+accentLightB.position.set(-3.2, 2.4, 3.2);
+scene.add(accentLightB);
+
+const topSoftLight = new THREE.PointLight(0xddeaff, 0.22, 18);
+topSoftLight.position.set(0, 4.2, 0.6);
+scene.add(topSoftLight);
+
+const frontFillLight = new THREE.DirectionalLight(0x9fe7ff, 0.2);
+frontFillLight.position.set(0.6, 1.6, 4.8);
+scene.add(frontFillLight);
 
 const floor = new THREE.Mesh(
   new THREE.CircleGeometry(2.6, 64),
   new THREE.MeshBasicMaterial({
-    color: 0x0c111b,
+    color: 0x0d1422,
     transparent: true,
-    opacity: 0.55,
+    opacity: 0.68,
   })
 );
 floor.rotation.x = -Math.PI / 2;
@@ -194,9 +216,7 @@ function normalizeModelPivotAndGround() {
   state.root.updateWorldMatrix(true, true);
 
   state.rootBaseY = state.root.position.y;
-  state.rootBaseRotX = state.root.rotation.x;
   state.rootBaseRotY = state.root.rotation.y;
-  state.rootBaseRotZ = state.root.rotation.z;
 }
 
 function fitCameraToCapsule() {
@@ -416,7 +436,7 @@ function autoSolveClosedLidQuat({
 const loader = new GLTFLoader();
 
 loader.load(
-  './assets/time_capsule_case_v1.glb',
+  './assets/time_capsule_case_v2.glb',
   (gltf) => {
     state.gltf = gltf;
     state.root = gltf.scene;
@@ -475,6 +495,19 @@ loader.load(
       const boneNode = state.lidBone || state.lidControl;
 
       const clips = Array.isArray(gltf.animations) ? gltf.animations : [];
+
+      // v2 model path (no baked animations): animate the real lid node directly.
+      // If the model has no Bone_00 and no clips, capsule_lid local quaternion is the open pose,
+      // and identity quaternion is the clean closed pose (fixed pivot in DCC).
+      if (!state.lidBone && lidMeshNode && clips.length === 0) {
+        state.lidAnimUsesHingeFallback = false;
+        state.lidControl = lidMeshNode;
+        state.lidOpenQuat = lidMeshNode.quaternion.clone().normalize();
+        state.lidClosedQuat = new THREE.Quaternion(); // identity = closed (for v2 export)
+        state.lidAnimT = 1; // start open
+
+        console.info('[lid] v2 direct lid animation: open -> identity on capsule_lid');
+      } else {
 
       const getBoneQuatTrack = (clip) => {
         if (!clip || !Array.isArray(clip.tracks)) return null;
@@ -611,6 +644,7 @@ loader.load(
       }
 
       state.lidAnimT = 1; // start open
+      }
     }
 
     // Re-center pivot + ground alignment after lid pose is initialized
@@ -618,6 +652,9 @@ loader.load(
 
     // Camera framing after final pose/pivot
     fitCameraToCapsule();
+
+    // Make capsule look more metallic / futuristic
+    enhanceCapsuleAppearance();
 
     setupScreenPlaceholders();
     updateDynamicTextures();
@@ -628,12 +665,782 @@ loader.load(
   undefined,
   (err) => {
     console.error('GLB load error', err);
-    alert('Failed to load the 3D model. Make sure the site is opened through a local server or GitHub Pages.');
+    alert('Не вдалося завантажити 3D модель. Перевір, що сайт відкритий через локальний сервер або GitHub Pages.');
   }
 );
 
+
+function clamp01(v) {
+  return Math.min(1, Math.max(0, v));
+}
+
+function easeInOutCubic(t) {
+  const x = clamp01(t);
+  return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+}
+
+function easeOutCubic(t) {
+  const x = clamp01(t);
+  return 1 - Math.pow(1 - x, 3);
+}
+
+function applyTextureOrientation(tex, kind = 'default') {
+  if (!tex) return tex;
+
+  // IMPORTANT: canvases applied to GLTF meshes must use flipY=false (same as glTF textures),
+  // otherwise text/icons appear upside-down on screen_* meshes.
+  tex.flipY = false;
+
+  tex.center.set(0.5, 0.5);
+  tex.rotation = -Math.PI / 2; // GLB screens in this model are UV-rotated 90deg
+  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.repeat.set(1, 1);
+  tex.offset.set(0, 0);
+
+  // Lid screen UV in this GLB is mirrored relative to side screens.
+  // IMPORTANT: negative repeat requires RepeatWrapping (with Clamp it can sample edge color -> blank screen on some GPUs).
+  if (kind === 'lid') {
+    // Lid screen UV is opposite to the side screens in this GLB.
+    // Use +90deg (instead of the shared -90deg) + Y mirror to keep the lid display upright.
+    tex.rotation = Math.PI / 2;
+    tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.y = -1;
+    tex.offset.y = 1;
+  }
+
+  tex.needsUpdate = true;
+  return tex;
+}
+
+function makeCanvasPack(width, height, painter) {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy?.() || 1);
+
+  if (typeof painter === 'function') painter(ctx, width, height, 0);
+
+  tex.needsUpdate = true;
+  return { canvas, ctx, tex, width, height };
+}
+
+function createScreenMaterial(tex, emissiveHex = 0x0a1320, emissiveIntensity = 0.55) {
+  return new THREE.MeshPhysicalMaterial({
+    map: tex,
+    transparent: true,
+    opacity: 1,
+    metalness: 0.06,
+    roughness: 0.28,
+    clearcoat: 0.75,
+    clearcoatRoughness: 0.22,
+    emissive: new THREE.Color(emissiveHex),
+    emissiveIntensity,
+  });
+}
+
+function ensureScreenFxPack(key, width, height) {
+  if (state.screenFx[key]) return state.screenFx[key];
+  const pack = makeCanvasPack(width, height);
+  applyTextureOrientation(pack.tex, key);
+  state.screenFx[key] = pack;
+  return pack;
+}
+
+function drawScreenGlassBg(ctx, w, h, opts = {}) {
+  const {
+    radius = 34,
+    border = 3,
+    glow = 0.18,
+    accentA = 'rgba(133,245,255,0.35)',
+    accentB = 'rgba(123,134,255,0.20)',
+    inner = 'rgba(8,12,18,0.86)',
+  } = opts;
+
+  ctx.clearRect(0, 0, w, h);
+
+  const bg = ctx.createLinearGradient(0, 0, w, h);
+  bg.addColorStop(0, inner);
+  bg.addColorStop(0.55, 'rgba(12,18,26,0.92)');
+  bg.addColorStop(1, 'rgba(9,13,20,0.9)');
+  ctx.fillStyle = bg;
+  roundRect(ctx, 6, 6, w - 12, h - 12, radius);
+  ctx.fill();
+
+  if (glow > 0) {
+    const rg = ctx.createRadialGradient(w * 0.2, h * 0.25, 20, w * 0.35, h * 0.45, Math.max(w, h));
+    rg.addColorStop(0, accentA);
+    rg.addColorStop(0.45, accentB);
+    rg.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.globalAlpha = glow;
+    roundRect(ctx, 6, 6, w - 12, h - 12, radius);
+    ctx.fillStyle = rg;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+  ctx.lineWidth = border;
+  roundRect(ctx, 6, 6, w - 12, h - 12, radius);
+  ctx.stroke();
+
+  ctx.save();
+  roundRect(ctx, 8, 8, w - 16, h - 16, radius - 2);
+  ctx.clip();
+  const shine = ctx.createLinearGradient(0, 0, 0, h * 0.48);
+  shine.addColorStop(0, 'rgba(255,255,255,0.22)');
+  shine.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = shine;
+  ctx.fillRect(0, 0, w, h * 0.5);
+  ctx.restore();
+}
+
+function drawTabletHudFx(ctx, w, h, time, opts = {}) {
+  const {
+    radius = 28,
+    accent = [118, 232, 255],
+    accent2 = [130, 148, 255],
+    intensity = 1,
+    grid = true,
+  } = opts;
+
+  ctx.save();
+  roundRect(ctx, 8, 8, w - 16, h - 16, radius);
+  ctx.clip();
+
+  // Deep OLED body
+  const base = ctx.createLinearGradient(0, 0, 0, h);
+  base.addColorStop(0, 'rgba(2,8,14,0.92)');
+  base.addColorStop(0.5, 'rgba(5,14,22,0.94)');
+  base.addColorStop(1, 'rgba(2,7,13,0.96)');
+  ctx.fillStyle = base;
+  ctx.fillRect(0, 0, w, h);
+
+  // Atmospheric glow
+  const g1 = ctx.createRadialGradient(w * 0.18, h * 0.22, 6, w * 0.25, h * 0.28, Math.max(w, h) * 0.8);
+  g1.addColorStop(0, `rgba(${accent[0]},${accent[1]},${accent[2]},${0.18 * intensity})`);
+  g1.addColorStop(0.45, `rgba(${accent2[0]},${accent2[1]},${accent2[2]},${0.11 * intensity})`);
+  g1.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = g1;
+  ctx.fillRect(0, 0, w, h);
+
+  // HUD grid
+  if (grid) {
+    ctx.globalAlpha = 0.08 * intensity;
+    ctx.strokeStyle = `rgba(${accent[0]},${accent[1]},${accent[2]},0.8)`;
+    ctx.lineWidth = 1;
+    const stepX = Math.max(16, Math.round(w / 14));
+    const stepY = Math.max(10, Math.round(h / 10));
+    ctx.beginPath();
+    for (let x = stepX / 2; x < w; x += stepX) { ctx.moveTo(x, 0); ctx.lineTo(x, h); }
+    for (let y = stepY / 2; y < h; y += stepY) { ctx.moveTo(0, y); ctx.lineTo(w, y); }
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  // Scanlines
+  ctx.globalAlpha = 0.075 * intensity;
+  ctx.fillStyle = 'rgba(180,245,255,1)';
+  for (let y = 1; y < h; y += 4) ctx.fillRect(0, y, w, 1);
+  ctx.globalAlpha = 1;
+
+  // Moving scan beam
+  const beamY = ((time * 55) % (h + 30)) - 15;
+  const beam = ctx.createLinearGradient(0, beamY - 12, 0, beamY + 12);
+  beam.addColorStop(0, 'rgba(0,0,0,0)');
+  beam.addColorStop(0.5, `rgba(${accent[0]},${accent[1]},${accent[2]},${0.18 * intensity})`);
+  beam.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = beam;
+  ctx.fillRect(0, beamY - 12, w, 24);
+
+  // Diagonal glass reflections
+  ctx.save();
+  ctx.globalAlpha = 0.2;
+  ctx.translate(w * 0.12, h * 0.03);
+  ctx.rotate(-0.2);
+  const refl1 = ctx.createLinearGradient(0, 0, 0, h);
+  refl1.addColorStop(0, 'rgba(255,255,255,0.23)');
+  refl1.addColorStop(0.4, 'rgba(255,255,255,0.05)');
+  refl1.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = refl1;
+  ctx.fillRect(0, 0, Math.max(12, w * 0.08), h);
+  ctx.restore();
+
+  ctx.save();
+  ctx.globalAlpha = 0.09;
+  ctx.translate(w * 0.76, -h * 0.06);
+  ctx.rotate(-0.16);
+  const refl2 = ctx.createLinearGradient(0, 0, 0, h * 0.9);
+  refl2.addColorStop(0, 'rgba(255,255,255,0.18)');
+  refl2.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = refl2;
+  ctx.fillRect(0, 0, Math.max(10, w * 0.05), h * 0.9);
+  ctx.restore();
+
+  // Tiny sensor noise (controlled)
+  const tick = Math.floor(time * 18);
+  for (let i = 0; i < 18; i++) {
+    const seed = (i * 131 + tick * 71) % 997;
+    const x = 12 + ((seed * 37) % Math.max(1, w - 24));
+    const y = 12 + ((seed * 61) % Math.max(1, h - 24));
+    const a = 0.02 + ((seed % 7) / 7) * 0.09;
+    ctx.fillStyle = `rgba(${accent[0]},${accent[1]},${accent[2]},${a.toFixed(3)})`;
+    ctx.fillRect(x, y, 1, 1);
+  }
+
+  // Inner bezel glow
+  ctx.strokeStyle = `rgba(${accent[0]},${accent[1]},${accent[2]},${0.10 * intensity})`;
+  ctx.lineWidth = 2;
+  roundRect(ctx, 12, 12, w - 24, h - 24, Math.max(10, radius - 4));
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+  ctx.lineWidth = 1;
+  roundRect(ctx, 16, 16, w - 32, h - 32, Math.max(8, radius - 8));
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+function drawLockGlyph(ctx, x, y, size, progressClosed) {
+  const p = clamp01(progressClosed);
+  const bodyW = size * 0.78;
+  const bodyH = size * 0.62;
+  const bodyX = x - bodyW / 2;
+  const bodyY = y + size * 0.06;
+
+  const shackleW = size * 0.52;
+  const shackleH = size * 0.46;
+  const shackleY = y - size * 0.06;
+  const openAngle = THREE.MathUtils.degToRad(-42) * (1 - p);
+  const lift = (1 - p) * size * 0.06;
+
+  ctx.save();
+  ctx.lineWidth = size * 0.08;
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = p < 0.5 ? 'rgba(111,255,203,0.95)' : 'rgba(170,220,255,0.95)';
+  ctx.translate(x, shackleY - lift);
+  ctx.rotate(openAngle);
+  ctx.beginPath();
+  ctx.moveTo(-shackleW / 2, shackleH / 2);
+  ctx.quadraticCurveTo(-shackleW / 2, -shackleH / 2, 0, -shackleH / 2);
+  ctx.quadraticCurveTo(shackleW / 2, -shackleH / 2, shackleW / 2, shackleH / 2);
+  ctx.stroke();
+  ctx.restore();
+
+  const bodyGrad = ctx.createLinearGradient(bodyX, bodyY, bodyX + bodyW, bodyY + bodyH);
+  bodyGrad.addColorStop(0, p < 0.5 ? 'rgba(20,54,45,0.95)' : 'rgba(16,38,62,0.95)');
+  bodyGrad.addColorStop(1, p < 0.5 ? 'rgba(13,31,26,0.95)' : 'rgba(9,24,42,0.95)');
+  ctx.fillStyle = bodyGrad;
+  roundRect(ctx, bodyX, bodyY, bodyW, bodyH, size * 0.12);
+  ctx.fill();
+
+  ctx.strokeStyle = p < 0.5 ? 'rgba(111,255,203,0.45)' : 'rgba(139,211,255,0.5)';
+  ctx.lineWidth = size * 0.04;
+  roundRect(ctx, bodyX, bodyY, bodyW, bodyH, size * 0.12);
+  ctx.stroke();
+
+  ctx.fillStyle = 'rgba(210,246,255,0.9)';
+  ctx.beginPath();
+  ctx.arc(x, bodyY + bodyH * 0.42, size * 0.07, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillRect(x - size * 0.03, bodyY + bodyH * 0.42, size * 0.06, size * 0.15);
+}
+
+function drawLidScreenCanvas(ctx, w, h, time) {
+  // LID SCREEN FIX: current lid UVs display text mirrored horizontally,
+  // so we pre-flip the canvas once here to make the final screen readable.
+  ctx.save();
+  ctx.translate(w, 0);
+  ctx.scale(-1, 1);
+
+  drawScreenGlassBg(ctx, w, h, {
+    radius: 44,
+    border: 3.2,
+    glow: 0.22,
+    accentA: 'rgba(112,230,255,0.42)',
+    accentB: 'rgba(128,138,255,0.24)',
+    inner: 'rgba(5,10,16,0.94)',
+  });
+
+  drawTabletHudFx(ctx, w, h, time, {
+    radius: 38,
+    accent: state.sealed ? [151, 211, 255] : [114, 255, 204],
+    accent2: state.sealed ? [131, 150, 255] : [90, 218, 255],
+    intensity: 1.05,
+    grid: true,
+  });
+
+  const closeP = 1 - clamp01(state.lidAnimT);
+  const sealP = state.sealAnimPlaying ? closeP : (state.sealed ? 1 : 0);
+  const x = w * 0.17;
+  const y = h * 0.49;
+
+  // left module frame
+  const moduleX = w * 0.055;
+  const moduleY = h * 0.15;
+  const moduleW = w * 0.20;
+  const moduleH = h * 0.70;
+  const modGrad = ctx.createLinearGradient(moduleX, moduleY, moduleX + moduleW, moduleY + moduleH);
+  modGrad.addColorStop(0, state.sealed ? 'rgba(10,25,43,0.92)' : 'rgba(8,37,32,0.92)');
+  modGrad.addColorStop(1, state.sealed ? 'rgba(6,18,34,0.90)' : 'rgba(5,24,20,0.90)');
+  ctx.fillStyle = modGrad;
+  roundRect(ctx, moduleX, moduleY, moduleW, moduleH, 18);
+  ctx.fill();
+  ctx.strokeStyle = state.sealed ? 'rgba(150,214,255,0.28)' : 'rgba(114,255,204,0.28)';
+  ctx.lineWidth = 1.5;
+  roundRect(ctx, moduleX, moduleY, moduleW, moduleH, 18);
+  ctx.stroke();
+
+  drawLockGlyph(ctx, x, y, h * 0.55, sealP);
+
+  const status = state.sealed ? 'SEALED' : (state.sealAnimPlaying ? 'LOCKING…' : 'UNLOCKED');
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+
+  const tx = w * 0.30;
+  const titleGrad = ctx.createLinearGradient(tx, 0, w * 0.92, 0);
+  if (state.sealed) {
+    titleGrad.addColorStop(0, 'rgba(230,244,255,0.98)');
+    titleGrad.addColorStop(1, 'rgba(150,212,255,0.95)');
+  } else {
+    titleGrad.addColorStop(0, 'rgba(220,255,244,0.98)');
+    titleGrad.addColorStop(1, 'rgba(112,255,204,0.95)');
+  }
+  ctx.fillStyle = titleGrad;
+  ctx.shadowColor = state.sealed ? 'rgba(144,205,255,0.24)' : 'rgba(114,255,204,0.24)';
+  ctx.shadowBlur = 12;
+  ctx.font = '800 56px Inter, sans-serif';
+  ctx.fillText(status, tx, h * 0.43);
+  ctx.shadowBlur = 0;
+
+  ctx.font = '600 18px Inter, sans-serif';
+  ctx.fillStyle = 'rgba(206,228,248,0.72)';
+  ctx.fillText('TGE CAPSULE SECURITY', tx, h * 0.57);
+
+  // Progress bar block with pill markers
+  const barX = tx, barY = h * 0.68, barW = w * 0.57, barH = 22;
+  ctx.fillStyle = 'rgba(255,255,255,0.05)';
+  roundRect(ctx, barX, barY, barW, barH, 11);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+  ctx.lineWidth = 1;
+  roundRect(ctx, barX, barY, barW, barH, 11);
+  ctx.stroke();
+
+  const fillP = state.sealed ? 1 : (state.sealAnimPlaying ? easeOutCubic(closeP) : 0.18 + Math.sin(time * 2.3) * 0.03);
+  const fillW = Math.max(12, (barW - 4) * clamp01(fillP));
+  const fillGrad = ctx.createLinearGradient(barX, 0, barX + barW, 0);
+  fillGrad.addColorStop(0, state.sealed ? 'rgba(123,172,255,0.95)' : 'rgba(94,230,255,0.95)');
+  fillGrad.addColorStop(1, state.sealed ? 'rgba(170,220,255,0.95)' : 'rgba(116,255,204,0.95)');
+  ctx.fillStyle = fillGrad;
+  roundRect(ctx, barX + 2, barY + 2, fillW, barH - 4, 9);
+  ctx.fill();
+
+  const dotX = barX + 2 + fillW;
+  const dot = ctx.createRadialGradient(dotX, barY + barH / 2, 1, dotX, barY + barH / 2, 13);
+  dot.addColorStop(0, state.sealed ? 'rgba(195,230,255,1)' : 'rgba(150,255,220,1)');
+  dot.addColorStop(0.4, state.sealed ? 'rgba(195,230,255,0.34)' : 'rgba(150,255,220,0.34)');
+  dot.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = dot;
+  ctx.beginPath();
+  ctx.arc(dotX, barY + barH / 2, 10, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Telemetry micro text and corner markers
+  ctx.font = '600 9px Inter, sans-serif';
+  ctx.fillStyle = 'rgba(165,190,218,0.60)';
+  ctx.fillText(`SYNC ${Math.round((clamp01(fillP))*100)}%`, tx, h * 0.84);
+  ctx.fillText(`CRC ${(9216 + Math.round(fillP * 173)).toString(16).toUpperCase()}`, tx + 90, h * 0.84);
+  ctx.fillText(`LINK ${state.sealed ? 'SEALED' : 'ACTIVE'}`, tx + 190, h * 0.84);
+
+  ctx.strokeStyle = state.sealed ? 'rgba(150,214,255,0.22)' : 'rgba(114,255,204,0.22)';
+  ctx.lineWidth = 1.3;
+  const m = 16, l = 16;
+  ctx.beginPath();
+  ctx.moveTo(tx - m, 18 + l); ctx.lineTo(tx - m, 18); ctx.lineTo(tx - m + l, 18);
+  ctx.moveTo(w - 18 - l, 18); ctx.lineTo(w - 18, 18); ctx.lineTo(w - 18, 18 + l);
+  ctx.moveTo(tx - m, h - 18 - l); ctx.lineTo(tx - m, h - 18); ctx.lineTo(tx - m + l, h - 18);
+  ctx.stroke();
+
+  // animated shimmer inside bar
+  const sweepX = ((time * 180) % (barW + 120)) - 60;
+  ctx.save();
+  roundRect(ctx, barX + 2, barY + 2, barW - 4, barH - 4, 9);
+  ctx.clip();
+  const sweep = ctx.createLinearGradient(barX + sweepX - 42, barY, barX + sweepX + 42, barY);
+  sweep.addColorStop(0, 'rgba(255,255,255,0)');
+  sweep.addColorStop(0.5, 'rgba(255,255,255,0.22)');
+  sweep.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = sweep;
+  ctx.fillRect(barX, barY, barW, barH);
+  ctx.restore();
+
+  ctx.restore();
+}
+
+function drawNameScreenCanvas(ctx, w, h, time) {
+  const nick = (state.nickname || 'PLAYER').slice(0, 24);
+
+  drawScreenGlassBg(ctx, w, h, {
+    radius: 36,
+    border: 2.8,
+    glow: 0.16,
+    accentA: 'rgba(120,226,255,0.26)',
+    accentB: 'rgba(124,138,255,0.18)',
+    inner: 'rgba(7,12,20,0.94)',
+  });
+  drawTabletHudFx(ctx, w, h, time, { radius: 32, accent: [118, 232, 255], accent2: [130, 148, 255], intensity: 0.9 });
+
+  ctx.save();
+  roundRect(ctx, 8, 8, w - 16, h - 16, 32);
+  ctx.clip();
+
+  // Left ID chip
+  const chipX = 30, chipY = 26, chipW = 130, chipH = h - 52;
+  const chip = ctx.createLinearGradient(chipX, chipY, chipX + chipW, chipY + chipH);
+  chip.addColorStop(0, 'rgba(10,22,38,0.92)');
+  chip.addColorStop(1, 'rgba(6,13,26,0.90)');
+  ctx.fillStyle = chip;
+  roundRect(ctx, chipX, chipY, chipW, chipH, 16);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(120,232,255,0.18)';
+  ctx.lineWidth = 1.3;
+  roundRect(ctx, chipX, chipY, chipW, chipH, 16);
+  ctx.stroke();
+
+  const cx = chipX + 38;
+  const cy = h * 0.5;
+  ctx.strokeStyle = 'rgba(120,236,255,0.78)';
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(cx, cy - 16, 12, 0, Math.PI * 2); ctx.stroke();
+  ctx.beginPath(); ctx.arc(cx, cy + 12, 18, Math.PI, Math.PI * 2); ctx.stroke();
+  ctx.fillStyle = 'rgba(120,236,255,0.85)';
+  ctx.fillRect(chipX + 65, cy - 20, 34, 3);
+  ctx.fillRect(chipX + 65, cy - 10, 44, 2);
+  ctx.fillRect(chipX + 65, cy, 30, 2);
+
+  // Main typography
+  let size = 92;
+  if (nick.length > 14) size = 72;
+  if (nick.length > 18) size = 58;
+  const pulse = 0.98 + Math.sin(time * 2.8) * 0.02;
+  const tx = 182;
+
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  ctx.font = '700 16px Inter, sans-serif';
+  ctx.fillStyle = 'rgba(189,210,235,0.72)';
+  ctx.fillText('IDENTITY VERIFIED', tx, h * 0.29);
+
+  const nameGrad = ctx.createLinearGradient(tx, 0, w - 24, 0);
+  nameGrad.addColorStop(0, 'rgba(235,248,255,0.98)');
+  nameGrad.addColorStop(0.45, 'rgba(181,238,255,0.97)');
+  nameGrad.addColorStop(1, 'rgba(150,176,255,0.94)');
+  ctx.shadowColor = 'rgba(118,220,255,0.28)';
+  ctx.shadowBlur = 14;
+  ctx.fillStyle = nameGrad;
+  ctx.font = `800 ${Math.round(size * pulse)}px Inter, sans-serif`;
+  ctx.fillText(nick, tx, h * 0.62);
+  ctx.shadowBlur = 0;
+
+  // Bottom HUD strip
+  const stripY = h - 54;
+  const stripW = w - tx - 28;
+  ctx.fillStyle = 'rgba(255,255,255,0.04)';
+  roundRect(ctx, tx, stripY, stripW, 24, 12);
+  ctx.fill();
+
+  const activity = 0.58 + Math.sin(time * 1.9) * 0.08;
+  const fillW = Math.max(30, (stripW - 4) * activity);
+  const fg = ctx.createLinearGradient(tx, 0, tx + fillW, 0);
+  fg.addColorStop(0, 'rgba(94,230,255,0.90)');
+  fg.addColorStop(1, 'rgba(150,176,255,0.92)');
+  ctx.fillStyle = fg;
+  roundRect(ctx, tx + 2, stripY + 2, fillW, 20, 10);
+  ctx.fill();
+
+  ctx.font = '600 10px Inter, sans-serif';
+  ctx.fillStyle = 'rgba(178,205,230,0.72)';
+  ctx.fillText('CAPSULE LINK ACTIVE', tx + 10, stripY + 16);
+
+  const ledX = w - 34, ledY = 28;
+  const led = ctx.createRadialGradient(ledX, ledY, 1, ledX, ledY, 12);
+  led.addColorStop(0, 'rgba(122,255,214,1)');
+  led.addColorStop(0.4, 'rgba(122,255,214,0.35)');
+  led.addColorStop(1, 'rgba(122,255,214,0)');
+  ctx.fillStyle = led;
+  ctx.beginPath(); ctx.arc(ledX, ledY, 11, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = 'rgba(160,255,224,0.95)';
+  ctx.beginPath(); ctx.arc(ledX, ledY, 2.8, 0, Math.PI * 2); ctx.fill();
+
+  ctx.restore();
+}
+
+function drawAvatarScreenCanvas(ctx, w, h, time) {
+  drawScreenGlassBg(ctx, w, h, {
+    radius: 56,
+    border: 2.8,
+    glow: 0.18,
+    accentA: 'rgba(110,228,255,0.22)',
+    accentB: 'rgba(128,138,255,0.16)',
+    inner: 'rgba(8,12,18,0.96)',
+  });
+  drawTabletHudFx(ctx, w, h, time, { radius: 50, accent: [114, 236, 255], accent2: [129, 148, 255], intensity: 0.85, grid: true });
+
+  const pad = 42;
+  const innerX = pad;
+  const innerY = pad;
+  const innerW = w - pad * 2;
+  const innerH = h - pad * 2;
+
+  // Glass frame / bezel
+  const frameGrad = ctx.createLinearGradient(innerX, innerY, innerX + innerW, innerY + innerH);
+  frameGrad.addColorStop(0, 'rgba(10,20,34,0.9)');
+  frameGrad.addColorStop(1, 'rgba(6,12,22,0.86)');
+  ctx.fillStyle = frameGrad;
+  roundRect(ctx, innerX, innerY, innerW, innerH, 44);
+  ctx.fill();
+
+  const borderPulse = 0.72 + Math.sin(time * 4.1) * 0.12;
+  ctx.strokeStyle = `rgba(140,220,255,${(0.18 + borderPulse * 0.20).toFixed(3)})`;
+  ctx.lineWidth = 3;
+  roundRect(ctx, innerX + 1.5, innerY + 1.5, innerW - 3, innerH - 3, 42);
+  ctx.stroke();
+
+  roundRect(ctx, innerX + 8, innerY + 8, innerW - 16, innerH - 16, 36);
+  ctx.save();
+  ctx.clip();
+
+  const img = state.avatarImgEl;
+  if (img && state.avatarImgLoaded) {
+    const floatX = Math.sin(time * 1.4) * 5;
+    const floatY = Math.cos(time * 1.7) * 4;
+    const scale = Math.max((innerW - 16) / img.width, (innerH - 16) / img.height) * (1.03 + Math.sin(time * 1.2) * 0.008);
+    const dw = img.width * scale;
+    const dh = img.height * scale;
+    const dx = innerX + 8 + ((innerW - 16) - dw) / 2 + floatX;
+    const dy = innerY + 8 + ((innerH - 16) - dh) / 2 + floatY;
+    ctx.drawImage(img, dx, dy, dw, dh);
+  } else {
+    const ph = ctx.createLinearGradient(innerX, innerY, innerX + innerW, innerY + innerH);
+    ph.addColorStop(0, 'rgba(24,34,50,0.95)');
+    ph.addColorStop(1, 'rgba(12,18,28,0.95)');
+    ctx.fillStyle = ph;
+    ctx.fillRect(innerX + 8, innerY + 8, innerW - 16, innerH - 16);
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = '700 26px Inter, sans-serif';
+    ctx.fillStyle = 'rgba(200,220,255,0.7)';
+    ctx.fillText('AVATAR', w / 2, h / 2);
+  }
+
+  // HUD overlay inside avatar display
+  for (let i = 0; i < 6; i++) {
+    const yy = innerY + 12 + (((time * 44) + i * 58) % (innerH + 60)) - 30;
+    const g = ctx.createLinearGradient(0, yy, 0, yy + 20);
+    g.addColorStop(0, 'rgba(0,0,0,0)');
+    g.addColorStop(0.5, 'rgba(110,228,255,0.08)');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(innerX + 8, yy, innerW - 16, 20);
+  }
+
+  const sweepY = ((time * 170) % (innerH + 180)) - 90;
+  const sg = ctx.createLinearGradient(0, innerY + sweepY - 36, 0, innerY + sweepY + 36);
+  sg.addColorStop(0, 'rgba(255,255,255,0)');
+  sg.addColorStop(0.5, 'rgba(180,240,255,0.14)');
+  sg.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = sg;
+  ctx.fillRect(innerX + 8, innerY + 8, innerW - 16, innerH - 16);
+
+  // glass glare
+  ctx.save();
+  ctx.globalAlpha = 0.16;
+  ctx.translate(innerX + innerW * 0.18, innerY + 8);
+  ctx.rotate(-0.2);
+  const glare = ctx.createLinearGradient(0, 0, 0, innerH);
+  glare.addColorStop(0, 'rgba(255,255,255,0.22)');
+  glare.addColorStop(0.35, 'rgba(255,255,255,0.06)');
+  glare.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = glare;
+  ctx.fillRect(0, 0, Math.max(16, innerW * 0.08), innerH);
+  ctx.restore();
+
+  ctx.restore();
+
+  // Outer corner brackets + markers
+  ctx.strokeStyle = 'rgba(165,236,255,0.50)';
+  ctx.lineWidth = 4;
+  const c = 22;
+  const corners = [
+    [innerX + 10, innerY + 10, 1, 1],
+    [innerX + innerW - 10, innerY + 10, -1, 1],
+    [innerX + 10, innerY + innerH - 10, 1, -1],
+    [innerX + innerW - 10, innerY + innerH - 10, -1, -1],
+  ];
+  for (const [cx, cy, sx, sy] of corners) {
+    ctx.beginPath();
+    ctx.moveTo(cx, cy + sy * c);
+    ctx.lineTo(cx, cy);
+    ctx.lineTo(cx + sx * c, cy);
+    ctx.stroke();
+  }
+
+  ctx.fillStyle = 'rgba(174,205,232,0.62)';
+  ctx.font = '600 12px Inter, sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText('OPTICAL FEED', innerX + 18, innerY + 26);
+}
+
+function renderDynamicScreens(force = false) {
+  const hasAny = state.screens.lid || state.screens.name || state.screens.avatar;
+  if (!hasAny) return;
+
+  const now = performance.now() * 0.001;
+  if (!force && (now - state.lastScreenFxDraw) < (1 / 30)) return;
+  state.lastScreenFxDraw = now;
+
+  if (state.screens.lid?.isMesh) {
+    const pack = ensureScreenFxPack('lid', 1024, 512);
+    drawLidScreenCanvas(pack.ctx, pack.width, pack.height, now);
+    pack.tex.needsUpdate = true;
+    if (!(state.screens.lid.material && state.screens.lid.material.map === pack.tex)) {
+      state.screens.lid.material = createScreenMaterial(pack.tex, 0x071a19, 0.75);
+    }
+    state.screens.lid.material.emissiveIntensity = state.sealed ? 0.9 : 0.72;
+  }
+
+  if (state.screens.name?.isMesh) {
+    const pack = ensureScreenFxPack('name', 1024, 384);
+    drawNameScreenCanvas(pack.ctx, pack.width, pack.height, now);
+    pack.tex.needsUpdate = true;
+    if (!(state.screens.name.material && state.screens.name.material.map === pack.tex)) {
+      state.screens.name.material = createScreenMaterial(pack.tex, 0x0a1220, 0.65);
+    }
+    state.screens.name.material.emissiveIntensity = 0.58 + Math.sin(now * 3.7) * 0.06;
+  }
+
+  if (state.screens.avatar?.isMesh) {
+    const pack = ensureScreenFxPack('avatar', 768, 768);
+    drawAvatarScreenCanvas(pack.ctx, pack.width, pack.height, now);
+    pack.tex.needsUpdate = true;
+    if (!(state.screens.avatar.material && state.screens.avatar.material.map === pack.tex)) {
+      state.screens.avatar.material = createScreenMaterial(pack.tex, 0x091523, 0.62);
+    }
+    state.screens.avatar.material.emissiveIntensity = 0.55 + Math.sin(now * 3.1 + 0.8) * 0.05;
+  }
+}
+
+function prepareAvatarImageForScreens() {
+  if (!state.avatarDataUrl) {
+    state.avatarImgEl = null;
+    state.avatarImgLoaded = false;
+    return;
+  }
+  const img = new Image();
+  img.onload = () => {
+    state.avatarImgEl = img;
+    state.avatarImgLoaded = true;
+    renderDynamicScreens(true);
+  };
+  img.onerror = () => {
+    state.avatarImgEl = null;
+    state.avatarImgLoaded = false;
+  };
+  img.src = state.avatarDataUrl;
+}
+
+function makeEdgeGlowForMesh(mesh) {
+  if (!mesh?.isMesh || !mesh.geometry) return;
+  if (mesh.userData.__edgeGlowAdded) return;
+  mesh.userData.__edgeGlowAdded = true;
+  try {
+    const edgeGeo = new THREE.EdgesGeometry(mesh.geometry, 34);
+    const edgeMat = new THREE.LineBasicMaterial({
+      color: 0x84d8ff,
+      transparent: true,
+      opacity: 0.22,
+    });
+    const edges = new THREE.LineSegments(edgeGeo, edgeMat);
+    edges.name = `${mesh.name || 'mesh'}__edgeglow`;
+    edges.renderOrder = 3;
+    mesh.add(edges);
+  } catch (e) {
+    console.warn('edge glow failed for mesh', mesh.name, e);
+  }
+}
+
+function enhanceCapsuleAppearance() {
+  const roots = [state.capsuleBase, state.capsuleLid].filter(Boolean);
+  const seen = new Set();
+
+  roots.forEach((rootObj) => {
+    rootObj.traverse((obj) => {
+      if (!obj?.isMesh || seen.has(obj)) return;
+      seen.add(obj);
+
+      const n = (obj.name || '').toLowerCase();
+      if (n.includes('screen_')) return;
+
+      const orig = obj.material;
+      if (!orig) return;
+      const mats = Array.isArray(orig) ? orig : [orig];
+      const converted = mats.map((m) => {
+        if (!m || m.userData?.__enhancedCapsuleMat) return m;
+        const hasTexture = !!m.map;
+        const baseColor = m.color ? m.color.clone() : new THREE.Color(0xffffff);
+        const luminance = (baseColor.r + baseColor.g + baseColor.b) / 3;
+        const isDarkDecal = hasTexture && luminance < 0.2;
+
+        if (isDarkDecal) {
+          const mm = m.clone();
+          if ('roughness' in mm) mm.roughness = 0.65;
+          if ('metalness' in mm) mm.metalness = 0.02;
+          mm.userData.__enhancedCapsuleMat = true;
+          return mm;
+        }
+
+        const pm = new THREE.MeshPhysicalMaterial({
+          color: baseColor,
+          map: m.map || null,
+          normalMap: m.normalMap || null,
+          roughnessMap: m.roughnessMap || null,
+          metalnessMap: m.metalnessMap || null,
+          aoMap: m.aoMap || null,
+          emissiveMap: m.emissiveMap || null,
+          transparent: !!m.transparent,
+          opacity: m.opacity ?? 1,
+          side: m.side ?? THREE.FrontSide,
+          depthWrite: m.depthWrite ?? true,
+          depthTest: m.depthTest ?? true,
+          metalness: hasTexture ? 0.58 : 0.78,
+          roughness: hasTexture ? 0.38 : 0.24,
+          clearcoat: 0.75,
+          clearcoatRoughness: 0.18,
+          sheen: 0.2,
+          sheenColor: new THREE.Color(0x8fd4ff),
+          emissive: new THREE.Color(0x050a12),
+          emissiveIntensity: 0.12,
+        });
+
+        if (pm.map) pm.map.colorSpace = THREE.SRGBColorSpace;
+        pm.userData.__enhancedCapsuleMat = true;
+        return pm;
+      });
+
+      obj.material = Array.isArray(orig) ? converted : converted[0];
+      if (!n.includes('plane')) makeEdgeGlowForMesh(obj);
+    });
+  });
+}
+
 // ---------- Dynamic textures ----------
-function makeCanvasTexture(width, height, painter) {
+function makeCanvasTexture(width, height, painter, kind = 'default') {
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
@@ -643,6 +1450,7 @@ function makeCanvasTexture(width, height, painter) {
 
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
+  applyTextureOrientation(tex, kind);
   tex.needsUpdate = true;
   return tex;
 }
@@ -690,7 +1498,7 @@ function placeholderMaterial(label) {
 
 function setupScreenPlaceholders() {
   if (state.screens.lid?.isMesh) {
-    state.screens.lid.material = placeholderMaterial('LID');
+    state.screens.lid.material = placeholderMaterial('LOCK');
   }
   if (state.screens.name?.isMesh) {
     state.screens.name.material = placeholderMaterial('NAME');
@@ -698,412 +1506,18 @@ function setupScreenPlaceholders() {
   if (state.screens.avatar?.isMesh) {
     state.screens.avatar.material = placeholderMaterial('AVATAR');
   }
-}
 
-
-function setDynamicScreenMaterial(mesh, material) {
-  if (!mesh?.isMesh || !material) return;
-  const prev = mesh.userData.__dynamicScreenMaterial;
-  if (prev && prev !== material) {
-    if (prev.map) prev.map.dispose?.();
-    prev.dispose?.();
-  }
-  mesh.material = material;
-  mesh.userData.__dynamicScreenMaterial = material;
-}
-
-function createDisplayMaterial(width, height, opts = {}) {
-  const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext('2d');
-
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.generateMipmaps = true;
-  tex.minFilter = THREE.LinearMipmapLinearFilter;
-  tex.magFilter = THREE.LinearFilter;
-  try {
-    tex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy?.() || 1);
-  } catch {}
-
-  const mat = new THREE.MeshPhysicalMaterial({
-    map: tex,
-    transparent: true,
-    metalness: 0.02,
-    roughness: 0.16,
-    clearcoat: 0.9,
-    clearcoatRoughness: 0.12,
-    transmission: 0.0,
-    ior: 1.45,
-    emissive: new THREE.Color(opts.emissive || 0x07131d),
-    emissiveIntensity: opts.emissiveIntensity ?? 0.42,
+  ['lid','name','avatar'].forEach((k) => {
+    const m = state.screens[k]?.material;
+    if (m?.map) applyTextureOrientation(m.map, k);
   });
-
-  return { canvas, ctx, tex, mat };
 }
 
-function ensureDisplaySurfaces() {
-  if (!state.screenSurfaces) state.screenSurfaces = {};
-
-  if (!state.screenSurfaces.lid && state.screens.lid?.isMesh) {
-    const s = createDisplayMaterial(1024, 512, { emissive: 0x0a1721, emissiveIntensity: 0.52 });
-    state.screenSurfaces.lid = s;
-    setDynamicScreenMaterial(state.screens.lid, s.mat);
+function updateDynamicTextures() {
+  if (state.avatarDataUrl && (!state.avatarImgEl || !state.avatarImgLoaded)) {
+    prepareAvatarImageForScreens();
   }
-  if (!state.screenSurfaces.name && state.screens.name?.isMesh) {
-    const s = createDisplayMaterial(1024, 384, { emissive: 0x09131b, emissiveIntensity: 0.48 });
-    state.screenSurfaces.name = s;
-    setDynamicScreenMaterial(state.screens.name, s.mat);
-  }
-  if (!state.screenSurfaces.avatar && state.screens.avatar?.isMesh) {
-    const s = createDisplayMaterial(768, 768, { emissive: 0x09131a, emissiveIntensity: 0.45 });
-    state.screenSurfaces.avatar = s;
-    setDynamicScreenMaterial(state.screens.avatar, s.mat);
-  }
-}
-
-function syncAvatarImageCache() {
-  if (!state.avatarDataUrl) return;
-  if (state.avatarImgSrc === state.avatarDataUrl && state.avatarImg) return;
-  state.avatarImgSrc = state.avatarDataUrl;
-  const img = new Image();
-  img.decoding = 'async';
-  img.onload = () => {
-    state.avatarImg = img;
-    state.lastScreenPaintAt = 0;
-    updateDynamicTextures(true);
-  };
-  img.src = state.avatarDataUrl;
-}
-
-function drawDisplayGlassBase(ctx, w, h, t, {
-  radius = 34,
-  accent = '#67d9ff',
-  accent2 = '#8e9eff',
-  bgTop = 'rgba(7,12,18,0.95)',
-  bgBottom = 'rgba(3,7,12,0.92)',
-} = {}) {
-  ctx.clearRect(0, 0, w, h);
-
-  // outer shell
-  const outerGrad = ctx.createLinearGradient(0, 0, 0, h);
-  outerGrad.addColorStop(0, 'rgba(235,246,255,0.10)');
-  outerGrad.addColorStop(0.1, 'rgba(255,255,255,0.03)');
-  outerGrad.addColorStop(1, 'rgba(0,0,0,0.15)');
-  ctx.fillStyle = outerGrad;
-  roundRect(ctx, 2, 2, w - 4, h - 4, radius + 6);
-  ctx.fill();
-
-  // inner glass panel
-  const gx = 8, gy = 8, gw = w - 16, gh = h - 16;
-  const glassGrad = ctx.createLinearGradient(0, gy, 0, gy + gh);
-  glassGrad.addColorStop(0, bgTop);
-  glassGrad.addColorStop(1, bgBottom);
-  ctx.fillStyle = glassGrad;
-  roundRect(ctx, gx, gy, gw, gh, radius);
-  ctx.fill();
-
-  // subtle grid
-  ctx.save();
-  roundRect(ctx, gx, gy, gw, gh, radius);
-  ctx.clip();
-  ctx.strokeStyle = 'rgba(110,170,210,0.07)';
-  ctx.lineWidth = 1;
-  const grid = 28;
-  for (let x = gx + 0.5; x < gx + gw; x += grid) {
-    ctx.beginPath(); ctx.moveTo(x, gy); ctx.lineTo(x, gy + gh); ctx.stroke();
-  }
-  for (let y = gy + 0.5; y < gy + gh; y += grid) {
-    ctx.beginPath(); ctx.moveTo(gx, y); ctx.lineTo(gx + gw, y); ctx.stroke();
-  }
-
-  // scanlines
-  for (let y = gy; y < gy + gh; y += 4) {
-    ctx.fillStyle = (y / 4) % 2 ? 'rgba(255,255,255,0.012)' : 'rgba(130,190,255,0.015)';
-    ctx.fillRect(gx, y, gw, 1);
-  }
-
-  // animated sweep glare
-  const sweepX = gx - gw * 0.35 + (gw * 1.7) * (0.5 + 0.5 * Math.sin(t * 0.85));
-  const sweep = ctx.createLinearGradient(sweepX, gy, sweepX + gw * 0.28, gy + gh);
-  sweep.addColorStop(0, 'rgba(255,255,255,0)');
-  sweep.addColorStop(0.45, 'rgba(255,255,255,0.02)');
-  sweep.addColorStop(0.52, 'rgba(175,232,255,0.14)');
-  sweep.addColorStop(0.6, 'rgba(255,255,255,0.04)');
-  sweep.addColorStop(1, 'rgba(255,255,255,0)');
-  ctx.fillStyle = sweep;
-  ctx.fillRect(gx, gy, gw, gh);
-
-  // corner accents
-  ctx.strokeStyle = 'rgba(255,255,255,0.14)';
-  ctx.lineWidth = 2;
-  roundRect(ctx, gx, gy, gw, gh, radius);
-  ctx.stroke();
-
-  ctx.strokeStyle = accent;
-  ctx.lineWidth = 2.2;
-  const c = 18;
-  [[gx+10,gy+10,1,1],[gx+gw-10,gy+10,-1,1],[gx+10,gy+gh-10,1,-1],[gx+gw-10,gy+gh-10,-1,-1]].forEach(([cx,cy,sx,sy])=>{
-    ctx.beginPath(); ctx.moveTo(cx,cy+sy*c*0.65); ctx.lineTo(cx,cy); ctx.lineTo(cx+sx*c,cy); ctx.stroke();
-  });
-
-  // top accent line
-  const line = ctx.createLinearGradient(gx, gy, gx+gw, gy);
-  line.addColorStop(0, accent);
-  line.addColorStop(0.5, 'rgba(255,255,255,0.9)');
-  line.addColorStop(1, accent2);
-  ctx.globalAlpha = 0.55;
-  ctx.fillStyle = line;
-  ctx.fillRect(gx + 18, gy + 10, gw - 36, 2);
-  ctx.globalAlpha = 1;
-
-  ctx.restore();
-  return { x: gx, y: gy, w: gw, h: gh };
-}
-
-function drawLockIcon(ctx, x, y, size, { locked = false, pulse = 0 }) {
-  ctx.save();
-  ctx.translate(x, y);
-  const bodyW = size * 0.7;
-  const bodyH = size * 0.5;
-  const shackleW = size * 0.5;
-  const shackleH = size * 0.42;
-  const openOffset = locked ? 0 : size * 0.16;
-  const glowAlpha = locked ? 0.16 : 0.22 + pulse * 0.08;
-
-  ctx.shadowColor = locked ? 'rgba(102,224,163,0.55)' : 'rgba(90,199,255,0.65)';
-  ctx.shadowBlur = 18 + pulse * 8;
-
-  // shackle
-  ctx.strokeStyle = locked ? 'rgba(146,255,200,0.95)' : 'rgba(127,212,255,0.95)';
-  ctx.lineWidth = Math.max(3, size * 0.08);
-  ctx.beginPath();
-  const shX = -shackleW / 2 + openOffset;
-  ctx.moveTo(shX, -bodyH * 0.2);
-  ctx.quadraticCurveTo(0 + openOffset, -bodyH * 0.75 - shackleH * 0.1, shX + shackleW, -bodyH * 0.2);
-  ctx.stroke();
-
-  // body glow
-  ctx.shadowBlur = 0;
-  const grad = ctx.createLinearGradient(-bodyW/2, 0, bodyW/2, bodyH);
-  grad.addColorStop(0, locked ? 'rgba(26,60,44,0.88)' : 'rgba(12,36,52,0.88)');
-  grad.addColorStop(1, locked ? 'rgba(14,30,22,0.95)' : 'rgba(7,18,28,0.95)');
-  ctx.fillStyle = grad;
-  roundRect(ctx, -bodyW/2, -bodyH/2, bodyW, bodyH, size*0.12);
-  ctx.fill();
-
-  ctx.strokeStyle = locked ? `rgba(146,255,200,${0.75 + glowAlpha})` : `rgba(123,214,255,${0.78 + glowAlpha})`;
-  ctx.lineWidth = 2;
-  roundRect(ctx, -bodyW/2, -bodyH/2, bodyW, bodyH, size*0.12);
-  ctx.stroke();
-
-  // key hole / center dot
-  ctx.fillStyle = locked ? 'rgba(172,255,214,0.95)' : 'rgba(196,239,255,0.92)';
-  ctx.beginPath();
-  ctx.arc(0, -bodyH * 0.04, size * 0.055, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.globalAlpha = 0.85;
-  ctx.fillRect(-size*0.02, 0, size*0.04, size*0.13);
-  ctx.globalAlpha = 1;
-  ctx.restore();
-}
-
-function drawTinyTelemetry(ctx, x, y, w, t, colorA = '#62d6ff') {
-  ctx.save();
-  ctx.translate(x, y);
-  for (let i = 0; i < 8; i++) {
-    const val = 0.25 + 0.75 * Math.abs(Math.sin(t * 1.4 + i * 0.65));
-    ctx.fillStyle = `rgba(${i%2?120:98}, ${i%2?223:214}, 255, ${0.14 + val * 0.35})`;
-    ctx.fillRect(i * (w / 8), 0, (w / 8) - 4, 8 + val * 14);
-  }
-  ctx.restore();
-}
-
-function paintLidDisplay(surface, t) {
-  const { ctx, canvas, tex } = surface;
-  const w = canvas.width, h = canvas.height;
-  const panel = drawDisplayGlassBase(ctx, w, h, t, { radius: 38, accent: '#5ed6ff', accent2: '#8f98ff' });
-
-  const cx = w * 0.17;
-  const cy = h * 0.53;
-  const lockingPulse = state.sealAnimPlaying ? Math.abs(Math.sin(t * 9.5)) : Math.abs(Math.sin(t * 2.5));
-  const locked = !!state.sealed || (state.sealAnimPlaying && state.sealProgress > 0.72);
-  drawLockIcon(ctx, cx, cy, 108, { locked, pulse: lockingPulse });
-
-  const mode = state.sealAnimPlaying ? 'LOCKING SEQUENCE' : (state.sealed ? 'CAPSULE SEALED' : 'CAPSULE OPEN');
-  const sub = state.sealAnimPlaying
-    ? `${Math.round((state.sealProgress || 0) * 100)}% · SECURE LINK`
-    : (state.sealed ? 'TGE TIMELOCK ACTIVE' : 'WAITING FOR SEAL COMMAND');
-
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'middle';
-  ctx.fillStyle = 'rgba(215,239,255,0.98)';
-  ctx.font = '700 44px Inter';
-  ctx.fillText(mode, w * 0.29, h * 0.43);
-
-  ctx.fillStyle = state.sealed ? 'rgba(162,255,206,0.95)' : 'rgba(112,223,255,0.9)';
-  ctx.font = '600 24px Inter';
-  ctx.fillText(sub, w * 0.29, h * 0.53);
-
-  // telemetry rows
-  ctx.fillStyle = 'rgba(198,234,255,0.7)';
-  ctx.font = '600 18px Inter';
-  ctx.fillText('LOCK STATUS', w * 0.29, h * 0.69);
-  ctx.fillText('ACCESS', w * 0.29, h * 0.78);
-  ctx.fillStyle = state.sealed ? 'rgba(162,255,206,0.95)' : 'rgba(112,223,255,0.92)';
-  ctx.fillText(state.sealed ? 'SEALED' : (state.sealAnimPlaying ? 'TRANSITION' : 'OPEN'), w * 0.53, h * 0.69);
-  ctx.fillText(state.readyProfile ? 'AUTHORIZED' : 'PENDING PROFILE', w * 0.53, h * 0.78);
-
-  const barX = panel.x + panel.w - 220;
-  ctx.fillStyle = 'rgba(255,255,255,0.06)';
-  roundRect(ctx, barX, panel.y + 44, 166, 14, 7); ctx.fill();
-  const p = state.sealed ? 1 : (state.sealAnimPlaying ? state.sealProgress : 0.08);
-  const barGrad = ctx.createLinearGradient(barX, 0, barX + 166, 0);
-  barGrad.addColorStop(0, '#59d2ff'); barGrad.addColorStop(1, state.sealed ? '#7bffbf' : '#9ea5ff');
-  ctx.fillStyle = barGrad;
-  roundRect(ctx, barX, panel.y + 44, 166 * p, 14, 7); ctx.fill();
-
-  // blinking status dot
-  const blinkOn = Math.sin(t * (state.sealAnimPlaying ? 12 : 4)) > -0.15;
-  ctx.fillStyle = blinkOn ? (state.sealed ? 'rgba(130,255,182,0.95)' : 'rgba(90,210,255,0.95)') : 'rgba(255,255,255,0.12)';
-  ctx.beginPath(); ctx.arc(w - 48, 44, 7, 0, Math.PI * 2); ctx.fill();
-
-  tex.needsUpdate = true;
-}
-
-function paintNameDisplay(surface, t) {
-  const { ctx, canvas, tex } = surface;
-  const w = canvas.width, h = canvas.height;
-  drawDisplayGlassBase(ctx, w, h, t, { radius: 30, accent: '#6be1ff', accent2: '#8f9eff' });
-
-  const nick = (state.nickname || 'PLAYER').slice(0, 24);
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'middle';
-
-  ctx.fillStyle = 'rgba(151,218,255,0.85)';
-  ctx.font = '700 20px Inter';
-  ctx.fillText('USER IDENT', 34, 42);
-
-  ctx.fillStyle = 'rgba(210,241,255,0.95)';
-  let size = 90;
-  if (nick.length > 14) size = 70;
-  if (nick.length > 18) size = 56;
-  ctx.font = `800 ${size}px Inter`;
-
-  const g = ctx.createLinearGradient(32, h*0.45, w-32, h*0.45);
-  g.addColorStop(0, '#effaff');
-  g.addColorStop(0.55, '#bde7ff');
-  g.addColorStop(1, '#a3aeff');
-  ctx.fillStyle = g;
-  ctx.fillText(nick, 34, h * 0.56);
-
-  // lower telemetry line
-  ctx.fillStyle = 'rgba(192,224,245,0.7)';
-  ctx.font = '600 18px Inter';
-  const status = state.sealed ? 'Status: Sealed' : (state.sealAnimPlaying ? 'Status: Locking' : 'Status: Ready');
-  ctx.fillText(status, 34, h - 42);
-
-  drawTinyTelemetry(ctx, w - 250, h - 64, 220, t);
-
-  tex.needsUpdate = true;
-}
-
-function paintAvatarDisplay(surface, t) {
-  const { ctx, canvas, tex } = surface;
-  const w = canvas.width, h = canvas.height;
-  const panel = drawDisplayGlassBase(ctx, w, h, t, { radius: 46, accent: '#5ee0ff', accent2: '#8da4ff' });
-
-  // header strip
-  ctx.fillStyle = 'rgba(255,255,255,0.03)';
-  roundRect(ctx, panel.x + 20, panel.y + 20, panel.w - 40, 46, 14); ctx.fill();
-  ctx.fillStyle = 'rgba(212,242,255,0.88)';
-  ctx.font = '700 20px Inter';
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'middle';
-  ctx.fillText('AVATAR FEED', panel.x + 34, panel.y + 44);
-
-  const pulse = 0.5 + 0.5 * Math.sin(t * 2.1);
-  ctx.fillStyle = `rgba(124,227,255,${0.35 + pulse * 0.3})`;
-  ctx.beginPath(); ctx.arc(panel.x + panel.w - 36, panel.y + 44, 6, 0, Math.PI * 2); ctx.fill();
-
-  const innerPad = 56;
-  const ix = innerPad, iy = innerPad + 24, iw = w - innerPad * 2, ih = h - innerPad * 2 - 18;
-  roundRect(ctx, ix, iy, iw, ih, 38);
-  ctx.save();
-  ctx.clip();
-
-  syncAvatarImageCache();
-  if (state.avatarImg && state.avatarImg.complete) {
-    const img = state.avatarImg;
-    const scale = Math.max(iw / img.width, ih / img.height);
-    const dw = img.width * scale;
-    const dh = img.height * scale;
-    const dx = ix + (iw - dw) / 2;
-    const dy = iy + (ih - dh) / 2;
-    ctx.drawImage(img, dx, dy, dw, dh);
-
-    // holographic tint & sweep
-    const holo = ctx.createLinearGradient(ix, iy, ix + iw, iy + ih);
-    holo.addColorStop(0, 'rgba(78,165,255,0.09)');
-    holo.addColorStop(0.5, 'rgba(126,255,246,0.06)');
-    holo.addColorStop(1, 'rgba(166,141,255,0.10)');
-    ctx.fillStyle = holo; ctx.fillRect(ix, iy, iw, ih);
-
-    const sweepY = iy - 40 + ((ih + 80) * ((Math.sin(t * 0.95) + 1) / 2));
-    const sgrad = ctx.createLinearGradient(ix, sweepY - 26, ix, sweepY + 26);
-    sgrad.addColorStop(0, 'rgba(255,255,255,0)');
-    sgrad.addColorStop(0.45, 'rgba(161,232,255,0.0)');
-    sgrad.addColorStop(0.5, 'rgba(161,232,255,0.17)');
-    sgrad.addColorStop(0.55, 'rgba(255,255,255,0.02)');
-    sgrad.addColorStop(1, 'rgba(255,255,255,0)');
-    ctx.fillStyle = sgrad; ctx.fillRect(ix, iy, iw, ih);
-  } else {
-    const ph = ctx.createLinearGradient(ix, iy, ix + iw, iy + ih);
-    ph.addColorStop(0, 'rgba(18,24,34,0.95)');
-    ph.addColorStop(1, 'rgba(8,14,22,0.95)');
-    ctx.fillStyle = ph; ctx.fillRect(ix, iy, iw, ih);
-    ctx.fillStyle = 'rgba(192,224,242,0.65)';
-    ctx.font = '700 34px Inter';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('NO AVATAR', ix + iw / 2, iy + ih / 2);
-  }
-
-  // faint HUD circles
-  ctx.strokeStyle = 'rgba(132,222,255,0.12)';
-  ctx.lineWidth = 2;
-  for (let i = 0; i < 3; i++) {
-    ctx.beginPath();
-    ctx.arc(ix + iw * 0.82, iy + ih * 0.2, 36 + i * 18, 0, Math.PI * 2);
-    ctx.stroke();
-  }
-
-  ctx.restore();
-
-  ctx.strokeStyle = 'rgba(220,243,255,0.18)';
-  ctx.lineWidth = 3;
-  roundRect(ctx, ix, iy, iw, ih, 38);
-  ctx.stroke();
-
-  tex.needsUpdate = true;
-}
-
-function updateDynamicTextures(force = false) {
-  const nowMs = performance.now();
-  const t = nowMs * 0.001;
-  state.screenAnimTime = t;
-
-  if (!force) {
-    const minGap = (state.sealAnimPlaying || state.sealed) ? 70 : 150;
-    if (nowMs - (state.lastScreenPaintAt || 0) < minGap) return;
-  }
-
-  ensureDisplaySurfaces();
-  if (state.screenSurfaces?.lid) paintLidDisplay(state.screenSurfaces.lid, t);
-  if (state.screenSurfaces?.name) paintNameDisplay(state.screenSurfaces.name, t);
-  if (state.screenSurfaces?.avatar) paintAvatarDisplay(state.screenSurfaces.avatar, t);
-  state.lastScreenPaintAt = nowMs;
+  renderDynamicScreens(true);
 }
 
 // ---------- UI logic ----------
@@ -1142,14 +1556,14 @@ ui.avatarInput.addEventListener('change', async () => {
 
   const allowed = ['image/png', 'image/jpeg', 'image/webp'];
   if (!allowed.includes(file.type)) {
-    alert('Only PNG/JPG/WEBP files are allowed.');
+    alert('Дозволені тільки PNG/JPG/WEBP');
     ui.avatarInput.value = '';
     validateIntroForm();
     return;
   }
 
   if (file.size > 5 * 1024 * 1024) {
-    alert('File is too large. Maximum size is 5MB.');
+    alert('Файл завеликий. Максимум 5MB');
     ui.avatarInput.value = '';
     validateIntroForm();
     return;
@@ -1158,6 +1572,7 @@ ui.avatarInput.addEventListener('change', async () => {
   try {
     const dataUrl = await fileToDataURL(file);
     state.avatarDataUrl = dataUrl;
+    prepareAvatarImageForScreens();
 
     ui.avatarPreview.innerHTML = '';
     const img = document.createElement('img');
@@ -1168,7 +1583,7 @@ ui.avatarInput.addEventListener('change', async () => {
     ui.statusAvatar.textContent = 'OK';
   } catch (err) {
     console.error('Avatar read error', err);
-    alert('Could not read the avatar file.');
+    alert('Не вдалося прочитати аватар');
   }
 });
 
@@ -1179,7 +1594,7 @@ ui.introForm.addEventListener('submit', async (e) => {
   const pickedFile = ui.avatarInput.files?.[0] || null;
 
   if (!nick || (!state.avatarDataUrl && !pickedFile)) {
-    alert('Enter a nickname and add an avatar 🫡');
+    alert('Введи нік і додай аватар 🫡');
     return;
   }
 
@@ -1187,16 +1602,17 @@ ui.introForm.addEventListener('submit', async (e) => {
     try {
       const typeOk = ['image/png', 'image/jpeg', 'image/webp'].includes(pickedFile.type);
       if (!typeOk) {
-        alert('Avatar must be PNG / JPG / WEBP.');
+        alert('Аватар має бути PNG / JPG / WEBP');
         return;
       }
       if (pickedFile.size > 5 * 1024 * 1024) {
-        alert('File is too large (max 5MB).');
+        alert('Файл завеликий (макс 5MB)');
         return;
       }
 
       const dataUrl = await fileToDataURL(pickedFile);
       state.avatarDataUrl = dataUrl;
+      prepareAvatarImageForScreens();
 
       ui.avatarPreview.innerHTML = '';
       const img = document.createElement('img');
@@ -1207,7 +1623,7 @@ ui.introForm.addEventListener('submit', async (e) => {
       ui.statusAvatar.textContent = 'OK';
     } catch (err) {
       console.error('Avatar fallback read error', err);
-      alert('Could not read the avatar. Try another PNG/JPG/WEBP file.');
+      alert('Не вдалося прочитати аватар. Спробуй інший PNG/JPG/WebP');
       return;
     }
   }
@@ -1244,10 +1660,6 @@ ui.sealBtn.addEventListener('click', () => {
   animateSealSequence();
 });
 
-ui.sealedViewBtn?.addEventListener('click', () => {
-  ui.sealedOverlay.classList.add('hidden');
-});
-
 ui.downloadBtn.addEventListener('click', () => {
   const a = document.createElement('a');
   a.href = renderer.domElement.toDataURL('image/png');
@@ -1258,40 +1670,42 @@ ui.downloadBtn.addEventListener('click', () => {
 // ---------- Seal animation ----------
 function animateSealSequence() {
   const start = performance.now();
-  const duration = 2600;
-  state.sealProgress = 0;
-  updateDynamicTextures(true);
+  const duration = 3600; // довше і плавніше
+
+  // Keep final pose the same as before, but add a full 360° spin on top.
+  const finalPoseDelta = 0; // stop facing front after full 360 spin
+  state.sealSpinTargetDelta = Math.PI * 2 + finalPoseDelta;
+  state.sealSpinCommitted = false;
+
+  // Prevent user camera drag from visually "breaking" the cinematic sealing motion.
+  controls.enabled = false;
 
   function step(now) {
-    const t = Math.min(1, (now - start) / duration);
-    state.sealProgress = t;
+    const t = clamp01((now - start) / duration);
+    const eased = easeInOutCubic(t);
 
-    // cubic easeInOut
-    const eased = t < 0.5
-      ? 4 * t * t * t
-      : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    // Lid closes smoothly through most of the animation, then settles.
+    const lidPhase = clamp01(eased / 0.84);
+    state.lidAnimT = 1 - easeInOutCubic(lidPhase);
 
-    // Lid closes during ~72% of timeline
-    const lidPhase = Math.min(1, eased / 0.72);
-    state.lidAnimT = 1 - lidPhase;
+    // One-way full spin + final pose offset (no back-and-forth).
+    const spinPhase = clamp01((t - 0.02) / 0.98);
+    state.spinAngle = state.sealSpinTargetDelta * easeInOutCubic(spinPhase);
 
-    // Stable absolute spin angle (no rotation accumulation drift)
-    state.spinAngle = Math.sin(t * Math.PI) * 0.75;
-
-    updateDynamicTextures();
+    renderDynamicScreens();
 
     if (t < 1) {
       requestAnimationFrame(step);
       return;
     }
 
-    // Final snap
     state.lidAnimT = 0;
+    state.rootBaseRotY += state.sealSpinTargetDelta;
     state.spinAngle = 0;
     state.sealed = true;
     state.sealAnimPlaying = false;
-    state.sealProgress = 1;
 
+    controls.enabled = true;
     ui.statusSeal.textContent = 'Sealed';
     ui.sealedOverlay.classList.remove('hidden');
     ui.downloadBtn.classList.remove('hidden');
@@ -1323,32 +1737,29 @@ function tick() {
 
   // 2) Keep root fixed in place and only apply absolute spin offset during seal
   if (state.root) {
-    const tSec = clock.elapsedTime;
+    state.root.position.y = state.rootBaseY;
 
     if (state.sealAnimPlaying) {
-      state.root.position.y = state.rootBaseY;
-      state.root.rotation.x = state.rootBaseRotX;
-      state.root.rotation.z = state.rootBaseRotZ;
       state.root.rotation.y = state.rootBaseRotY + state.spinAngle;
-    } else if (state.sealed) {
-      const bob = Math.sin(tSec * 0.95) * 0.012;
-      const yaw = Math.sin(tSec * 0.55) * 0.028;
-      const roll = Math.sin(tSec * 0.9 + 0.8) * 0.010;
-      const pitch = Math.sin(tSec * 0.7 + 1.2) * 0.005;
-      state.root.position.y = state.rootBaseY + bob;
-      state.root.rotation.x = state.rootBaseRotX + pitch;
-      state.root.rotation.y = state.rootBaseRotY + yaw;
-      state.root.rotation.z = state.rootBaseRotZ + roll;
     } else {
-      state.root.position.y = state.rootBaseY;
-      state.root.rotation.x = state.rootBaseRotX;
       state.root.rotation.y = state.rootBaseRotY;
-      state.root.rotation.z = state.rootBaseRotZ;
     }
   }
 
+  // Dynamic electronic screens (lock/name/avatar)
   if (state.readyProfile || state.sealAnimPlaying || state.sealed) {
-    updateDynamicTextures();
+    renderDynamicScreens();
+  }
+
+  // Gentle idle pulse while box is open
+  const tNow = clock.elapsedTime;
+  if (!state.sealAnimPlaying && !state.sealed) {
+    if (state.screens.name?.material) {
+      state.screens.name.material.emissiveIntensity = 0.58 + Math.sin(tNow * 2.8) * 0.05;
+    }
+    if (state.screens.avatar?.material) {
+      state.screens.avatar.material.emissiveIntensity = 0.56 + Math.sin(tNow * 2.3 + 0.7) * 0.05;
+    }
   }
 
   controls.update();
