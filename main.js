@@ -89,7 +89,7 @@ const renderer = new THREE.WebGLRenderer({
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.08;
+renderer.toneMappingExposure = 1.0;
 ui.viewer.appendChild(renderer.domElement);
 
 const controls = new OrbitControls(camera, renderer.domElement);
@@ -101,30 +101,34 @@ controls.enablePan = false;
 controls.maxPolarAngle = Math.PI * 0.52;
 controls.minPolarAngle = Math.PI * 0.18;
 
-scene.add(new THREE.AmbientLight(0xffffff, 0.42));
+scene.add(new THREE.AmbientLight(0xffffff, 0.5));
 
-const hemi = new THREE.HemisphereLight(0xaed5ff, 0x070b12, 0.55);
+const hemi = new THREE.HemisphereLight(0xb7deff, 0x090d16, 0.75);
 scene.add(hemi);
 
-const keyLight = new THREE.DirectionalLight(0xbfe7ff, 1.1);
-keyLight.position.set(3, 4, 2);
+const keyLight = new THREE.DirectionalLight(0xd8eeff, 0.72);
+keyLight.position.set(3.8, 4.6, 2.6);
 scene.add(keyLight);
 
-const rimLight = new THREE.DirectionalLight(0x6f7cff, 0.8);
-rimLight.position.set(-3, 2, -3);
+const rimLight = new THREE.DirectionalLight(0x7f92ff, 0.46);
+rimLight.position.set(-4.2, 2.7, -3.8);
 scene.add(rimLight);
 
-const accentLightA = new THREE.PointLight(0x6fe4ff, 0.85, 8);
-accentLightA.position.set(2.2, 1.4, -1.8);
+const accentLightA = new THREE.PointLight(0x74e3ff, 0.28, 14);
+accentLightA.position.set(3.1, 1.9, -2.6);
 scene.add(accentLightA);
 
-const accentLightB = new THREE.PointLight(0x7b86ff, 0.65, 10);
-accentLightB.position.set(-2.4, 1.9, 2.3);
+const accentLightB = new THREE.PointLight(0x8a96ff, 0.24, 16);
+accentLightB.position.set(-3.2, 2.4, 3.2);
 scene.add(accentLightB);
 
-const topSoftLight = new THREE.PointLight(0xffffff, 0.35, 12);
-topSoftLight.position.set(0, 3.4, 0.4);
+const topSoftLight = new THREE.PointLight(0xddeaff, 0.22, 18);
+topSoftLight.position.set(0, 4.2, 0.6);
 scene.add(topSoftLight);
+
+const frontFillLight = new THREE.DirectionalLight(0x9fe7ff, 0.2);
+frontFillLight.position.set(0.6, 1.6, 4.8);
+scene.add(frontFillLight);
 
 const floor = new THREE.Mesh(
   new THREE.CircleGeometry(2.6, 64),
@@ -691,6 +695,15 @@ function applyTextureOrientation(tex, kind = 'default') {
   tex.rotation = -Math.PI / 2; // GLB screens in this model are UV-rotated 90deg
   tex.wrapS = THREE.ClampToEdgeWrapping;
   tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.repeat.set(1, 1);
+  tex.offset.set(0, 0);
+
+  // Lid screen UV in this GLB is mirrored relative to side screens.
+  if (kind === 'lid') {
+    tex.repeat.x = -1;
+    tex.offset.x = 1;
+  }
+
   tex.needsUpdate = true;
   return tex;
 }
@@ -1398,22 +1411,27 @@ ui.downloadBtn.addEventListener('click', () => {
 // ---------- Seal animation ----------
 function animateSealSequence() {
   const start = performance.now();
-  const duration = 2300;
+  const duration = 3600; // довше і плавніше
 
-  state.sealSpinTargetDelta = Math.PI * 0.92; // one clean forward rotation
+  // Keep final pose the same as before, but add a full 360° spin on top.
+  const finalPoseDelta = Math.PI * 0.92;
+  state.sealSpinTargetDelta = Math.PI * 2 + finalPoseDelta;
   state.sealSpinCommitted = false;
+
+  // Prevent user camera drag from visually "breaking" the cinematic sealing motion.
+  controls.enabled = false;
 
   function step(now) {
     const t = clamp01((now - start) / duration);
     const eased = easeInOutCubic(t);
 
-    // Lid closes in first ~78% but stays synced with the global motion
-    const lidPhase = clamp01(eased / 0.78);
+    // Lid closes smoothly through most of the animation, then settles.
+    const lidPhase = clamp01(eased / 0.84);
     state.lidAnimT = 1 - easeInOutCubic(lidPhase);
 
-    // One-way spin (no "туда-сюда")
-    const spinPhase = clamp01((eased - 0.04) / 0.96);
-    state.spinAngle = state.sealSpinTargetDelta * easeOutCubic(spinPhase);
+    // One-way full spin + final pose offset (no back-and-forth).
+    const spinPhase = clamp01((t - 0.02) / 0.98);
+    state.spinAngle = state.sealSpinTargetDelta * easeInOutCubic(spinPhase);
 
     renderDynamicScreens();
 
@@ -1428,6 +1446,7 @@ function animateSealSequence() {
     state.sealed = true;
     state.sealAnimPlaying = false;
 
+    controls.enabled = true;
     ui.statusSeal.textContent = 'Sealed';
     ui.sealedOverlay.classList.remove('hidden');
     ui.downloadBtn.classList.remove('hidden');
