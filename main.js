@@ -519,10 +519,10 @@ function updateLetterSealFlight(globalT) {
   // Longer, more natural sequence:
   // 1) appear from button -> 2) side sweep -> 3) live drop into box -> 4) bounce/settle (no pop/disappear)
   const appearAt = 0.016;
-  const sideFlyEnd = 0.28;
-  const sweepEnd = 0.40;
-  const dropEnd = 0.56;
-  const settleEnd = 0.66;
+  const sideFlyEnd = 0.30;
+  const sweepEnd = 0.43;
+  const dropEnd = 0.60;
+  const settleEnd = 0.72;
 
   const {
     start, c1, c2, sideApproach, sideHover,
@@ -540,7 +540,7 @@ function updateLetterSealFlight(globalT) {
   let pos = _letterTmpA;
   let tangent = _letterTmpB.set(0, 0, -1);
   let scaleMul = 0.80;
-  let wobble = 0.45;
+  let wobble = 0.28;
   let basePitchAdd = 0.10;
   let baseRoll = -0.12;
 
@@ -555,13 +555,13 @@ function updateLetterSealFlight(globalT) {
     cubicBezierVec3(_letterTmpC, start, c1, c2, sideApproach, p2);
     tangent.copy(_letterTmpC).sub(pos).normalize();
 
-    const flutter = (1 - p) * 0.95 + 0.12;
-    pos.x += Math.sin(globalT * Math.PI * 10.7) * Math.max(0.006, sx * 0.010) * flutter;
-    pos.y += Math.sin(globalT * Math.PI * 8.9 + 0.5) * Math.max(0.004, sy * 0.008) * flutter;
-    pos.z += Math.cos(globalT * Math.PI * 9.3) * Math.max(0.004, sz * 0.007) * flutter;
+    const flutter = (1 - p) * 0.55 + 0.08;
+    pos.x += Math.sin(globalT * Math.PI * 6.2) * Math.max(0.0035, sx * 0.006) * flutter;
+    pos.y += Math.sin(globalT * Math.PI * 5.3 + 0.5) * Math.max(0.0025, sy * 0.0045) * flutter;
+    pos.z += Math.cos(globalT * Math.PI * 5.8) * Math.max(0.0025, sz * 0.0045) * flutter;
 
     scaleMul = 0.76 + p * 0.13;
-    wobble = 0.95 - p * 0.38;
+    wobble = 0.48 - p * 0.18;
     basePitchAdd = 0.14;
     baseRoll = -0.17;
   } else if (globalT <= sweepEnd) {
@@ -573,13 +573,13 @@ function updateLetterSealFlight(globalT) {
 
     // A small "banking turn" and gentle drift toward the entry point
     pos.lerp(entry, p * 0.45);
-    pos.y += Math.sin(p * Math.PI * 1.8) * Math.max(0.004, sy * 0.006) * (1 - p);
-    pos.z += Math.sin(p * Math.PI * 2.0 + 0.6) * Math.max(0.003, sz * 0.005) * (1 - p);
+    pos.y += Math.sin(p * Math.PI * 1.4) * Math.max(0.0025, sy * 0.0038) * (1 - p);
+    pos.z += Math.sin(p * Math.PI * 1.5 + 0.6) * Math.max(0.0018, sz * 0.0032) * (1 - p);
 
     tangent.copy(entry).sub(sideApproach).normalize();
 
     scaleMul = 0.89 + p * 0.03;
-    wobble = 0.42 - p * 0.18;
+    wobble = 0.24 - p * 0.10;
     basePitchAdd = 0.10;
     baseRoll = -0.10 + p * 0.10;
   } else if (globalT <= dropEnd) {
@@ -592,14 +592,14 @@ function updateLetterSealFlight(globalT) {
 
     // More alive fall (small flutter/tumble while losing energy)
     const alive = (1 - p);
-    pos.x += Math.sin(globalT * Math.PI * 10.5 + 0.4) * Math.max(0.0025, sx * 0.0040) * alive * alive;
-    pos.z += Math.sin(globalT * Math.PI * 8.6) * Math.max(0.0025, sz * 0.0038) * alive * alive;
-    pos.y += Math.sin(p * Math.PI * 3.0) * Math.max(0.004, sy * 0.006) * alive * 0.6;
+    pos.x += Math.sin(globalT * Math.PI * 6.0 + 0.4) * Math.max(0.0015, sx * 0.0026) * alive * alive;
+    pos.z += Math.sin(globalT * Math.PI * 5.2) * Math.max(0.0015, sz * 0.0024) * alive * alive;
+    pos.y += Math.sin(p * Math.PI * 2.0) * Math.max(0.0025, sy * 0.0038) * alive * 0.35;
 
     tangent.set(0.12, -1, 0.08).normalize();
 
     scaleMul = 0.92 - p * 0.03;
-    wobble = 0.22 + alive * 0.10;
+    wobble = 0.10 + alive * 0.06;
     basePitchAdd = 0.02 - p * 0.14;
     baseRoll = 0.02 + p * 0.10;
   } else if (globalT <= settleEnd) {
@@ -610,19 +610,19 @@ function updateLetterSealFlight(globalT) {
     pos.copy(innerMid).lerp(land, e);
 
     // Tiny bounce that decays quickly
-    const bounce = Math.sin(p * Math.PI * 2.6) * (1 - p) * (1 - p);
-    pos.y += Math.max(0, bounce) * Math.max(0.010, baseSize.y * 0.020);
+    const bounce = Math.sin(p * Math.PI * 1.7) * (1 - p) * (1 - p);
+    pos.y += Math.max(0, bounce) * Math.max(0.005, baseSize.y * 0.010);
 
     // Slight skid/settle on the bottom plane
-    pos.x += Math.sin(p * Math.PI * 1.6 + 0.8) * Math.max(0.002, sx * 0.0026) * (1 - p);
-    pos.z += Math.cos(p * Math.PI * 1.4) * Math.max(0.002, sz * 0.0024) * (1 - p);
+    pos.x += Math.sin(p * Math.PI * 1.2 + 0.8) * Math.max(0.0012, sx * 0.0018) * (1 - p);
+    pos.z += Math.cos(p * Math.PI * 1.1) * Math.max(0.0012, sz * 0.0016) * (1 - p);
 
     tangent.copy(land).sub(innerMid);
     if (tangent.lengthSq() < 1e-5) tangent.set(0, -1, 0);
     tangent.normalize();
 
     scaleMul = 0.89;
-    wobble = 0.20 * (1 - p);
+    wobble = 0.08 * (1 - p);
     basePitchAdd = -0.12 - p * 0.08;
     baseRoll = 0.10 * (1 - p);
   } else {
@@ -630,7 +630,7 @@ function updateLetterSealFlight(globalT) {
     pos.copy(land);
     tangent.set(0, 0, 1);
     scaleMul = 0.89;
-    wobble = 0.03;
+    wobble = 0.01;
     basePitchAdd = -0.20;
     baseRoll = 0.0;
   }
@@ -641,9 +641,9 @@ function updateLetterSealFlight(globalT) {
   const yaw = Math.atan2(tangent.x, tangent.z);
   const pitch = -Math.atan2(tangent.y, Math.max(1e-4, Math.hypot(tangent.x, tangent.z)));
 
-  const flutterPitch = Math.sin(globalT * Math.PI * 8.2 + 0.35) * 0.05 * wobble;
-  const flutterRoll = Math.sin(globalT * Math.PI * 6.9 + 0.15) * 0.09 * wobble;
-  const flutterYaw = Math.cos(globalT * Math.PI * 5.7) * 0.04 * wobble;
+  const flutterPitch = Math.sin(globalT * Math.PI * 4.2 + 0.35) * 0.024 * wobble;
+  const flutterRoll = Math.sin(globalT * Math.PI * 3.8 + 0.15) * 0.038 * wobble;
+  const flutterYaw = Math.cos(globalT * Math.PI * 3.2) * 0.018 * wobble;
 
   prop.rotation.set(
     pitch + basePitchAdd + flutterPitch,
