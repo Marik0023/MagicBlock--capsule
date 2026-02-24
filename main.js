@@ -32,6 +32,7 @@ const state = {
   nickname: '',
   avatarDataUrl: '',
   message: '',
+  overlayDismissedOnSealed: false,
   gltf: null,
   root: null,
 
@@ -117,6 +118,7 @@ function persistCapsuleState() {
       message: state.message || '',
       readyProfile: !!state.readyProfile,
       sealed: !!state.sealed,
+      overlayDismissedOnSealed: !!state.overlayDismissedOnSealed,
       savedAt: Date.now(),
     };
 
@@ -147,6 +149,7 @@ function loadPersistedCapsuleState() {
       message: typeof parsed.message === 'string' ? parsed.message.slice(0, 300) : '',
       readyProfile: !!parsed.readyProfile,
       sealed: !!parsed.sealed,
+      overlayDismissedOnSealed: !!parsed.overlayDismissedOnSealed,
     };
   } catch (err) {
     console.warn('localStorage read failed', err);
@@ -192,6 +195,8 @@ function applyPersistedCapsuleState(saved) {
     ui.messageInput.value = saved.message;
   }
 
+  state.overlayDismissedOnSealed = !!saved.overlayDismissedOnSealed;
+
   ui.charCount.textContent = `${state.message.length} / 300`;
   ui.statusText.textContent = `${state.message.length} / 300`;
 
@@ -201,7 +206,11 @@ function applyPersistedCapsuleState(saved) {
     ui.messageInput.disabled = true;
     ui.downloadBtn.classList.remove('hidden');
     ui.statusSeal.textContent = 'Sealed';
-    setSealedOverlayVisible(true, { showOk: true, blocking: true });
+    if (state.overlayDismissedOnSealed) {
+      setSealedOverlayVisible(false);
+    } else {
+      setSealedOverlayVisible(true, { showOk: true, blocking: true });
+    }
     state.lidAnimT = 0;
   }
 
@@ -2231,6 +2240,7 @@ ui.sealBtn.addEventListener('click', () => {
 
   setSealedOverlayVisible(false);
   state.sealAnimPlaying = true;
+  state.overlayDismissedOnSealed = false;
   updateSealButtonState();
   ui.statusSeal.textContent = 'Sealing...';
 
@@ -2245,7 +2255,10 @@ ui.downloadBtn.addEventListener('click', () => {
 });
 
 ui.overlayOkBtn?.addEventListener('click', () => {
+  state.overlayDismissedOnSealed = true;
   setSealedOverlayVisible(false);
+  controls.enabled = true;
+  persistCapsuleState();
 });
 
 // ---------- Seal animation ----------
@@ -2302,6 +2315,7 @@ function animateSealSequence() {
 
     state.sealed = true;
     state.sealAnimPlaying = false;
+    state.overlayDismissedOnSealed = false;
 
     controls.enabled = true;
     ui.statusSeal.textContent = 'Sealed';

@@ -132,7 +132,7 @@ body::after{
 
 .layout{
   display:grid;
-  grid-template-columns:minmax(0,.88fr) clamp(470px, 35vw, 640px);
+  grid-template-columns:minmax(0,.80fr) clamp(560px, 41vw, 860px);
   gap:12px;
   padding:10px;
   min-height:0;
@@ -210,7 +210,7 @@ body::after{
 .viewer-overlay p{margin:0;color:var(--muted)}
 .overlay-ok-btn{min-width:120px;font-weight:800;padding:10px 20px}
 
-.side-panel{display:flex;flex-direction:column;gap:12px;min-height:0;height:100%}
+.side-panel{display:flex;flex-direction:column;gap:12px;min-height:0;height:100%;width:100%}
 .side-panel > .card:first-child{flex:1;display:flex;flex-direction:column;min-height:0}
 .side-panel > .card:first-child .field{flex:1;min-height:0;display:grid;grid-template-rows:auto auto 1fr auto}
 .side-panel > .card:first-child textarea{min-height:200px;height:100%}
@@ -501,7 +501,7 @@ input[type="file"]::-webkit-file-upload-button{
 }
 
 @media (min-width: 981px) and (max-height: 900px){
-  .layout{grid-template-columns:minmax(0,.86fr) clamp(450px,34vw,620px); padding:8px; gap:10px;}
+  .layout{grid-template-columns:minmax(0,.78fr) clamp(520px,40vw,820px); padding:8px; gap:10px;}
   .card{padding:12px;}
   .card h2{font-size:18px;}
   textarea{min-height:96px;}
