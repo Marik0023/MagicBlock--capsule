@@ -1,6 +1,7 @@
 import * as THREE from "https://unpkg.com/three@0.160.1/build/three.module.js";
 import { OrbitControls } from "https://unpkg.com/three@0.160.1/examples/jsm/controls/OrbitControls.js";
 import { GLTFLoader } from "https://unpkg.com/three@0.160.1/examples/jsm/loaders/GLTFLoader.js";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const ui = {
   introModal: document.getElementById('introModal'),
@@ -24,7 +25,16 @@ const ui = {
   statusAvatar: document.getElementById('statusAvatar'),
   statusText: document.getElementById('statusText'),
   statusSeal: document.getElementById('statusSeal'),
+  capsuleFeedList: document.getElementById('capsuleFeedList'),
+  capsuleFeedEmpty: document.getElementById('capsuleFeedEmpty'),
+  refreshFeedBtn: document.getElementById('refreshFeedBtn'),
 };
+
+
+const SUPABASE_URL = 'https://dzamfjphmomvkepirxoh.supabase.co';
+const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_S05m0mHe9SnvWeoU9MZmVA_qZl-K6Q8';
+const CAPSULE_BUCKET = 'capsule-public';
+const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
 
 const state = {
   readyProfile: false,
@@ -82,6 +92,9 @@ const state = {
   letterPropReady: false,
   letterPropLoadStarted: false,
   letterFlightPathCache: null,
+
+  // prevent duplicate public feed inserts in one session
+  _feedSavedOnce: false,
 };
 
 const MIN_MESSAGE_CHARS = 10;
@@ -2111,6 +2124,136 @@ function slugify(v) {
     .replace(/^-+|-+$/g, '') || 'user';
 }
 
+
+function dataUrlToBlob(dataUrl) {
+  const str = String(dataUrl || '');
+  const parts = str.split(',');
+  if (parts.length < 2) throw new Error('Invalid data URL');
+  const meta = parts[0];
+  const base64 = parts.slice(1).join(',');
+  const match = meta.match(/data:(.*?);base64/i);
+  const mime = match?.[1] || 'application/octet-stream';
+  const bin = atob(base64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
+}
+
+function escapeHtml(value = '') {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function formatFeedDate(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleString([], {
+    year: 'numeric',
+    month: 'short',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+async function uploadBlobToPublicBucket(path, blob, contentType = 'application/octet-stream') {
+  const { error } = await supabase.storage.from(CAPSULE_BUCKET).upload(path, blob, {
+    contentType,
+    upsert: false,
+    cacheControl: '3600',
+  });
+  if (error) throw error;
+
+  const { data } = supabase.storage.from(CAPSULE_BUCKET).getPublicUrl(path);
+  if (!data?.publicUrl) throw new Error('Failed to get public URL');
+  return data.publicUrl;
+}
+
+function renderCapsuleFeed(items = []) {
+  if (!ui.capsuleFeedList || !ui.capsuleFeedEmpty) return;
+
+  if (!Array.isArray(items) || items.length === 0) {
+    ui.capsuleFeedList.innerHTML = '';
+    ui.capsuleFeedEmpty.classList.remove('hidden');
+    return;
+  }
+
+  ui.capsuleFeedEmpty.classList.add('hidden');
+  ui.capsuleFeedList.innerHTML = items.map((row) => `
+    <div class="feed-row">
+      <img class="feed-avatar" src="${escapeHtml(row.avatar_url || '')}" alt="avatar of ${escapeHtml(row.nickname || 'user')}" loading="lazy" />
+      <div class="feed-nick" title="${escapeHtml(row.nickname || '')}">${escapeHtml(row.nickname || 'Unknown')}</div>
+      <img class="feed-box" src="${escapeHtml(row.box_thumb_url || '')}" alt="sealed capsule thumbnail" loading="lazy" />
+      <div class="feed-date">${escapeHtml(formatFeedDate(row.sealed_at || row.created_at))}</div>
+    </div>
+  `).join('');
+}
+
+async function loadCapsuleFeed() {
+  if (!ui.capsuleFeedList || !ui.capsuleFeedEmpty) return;
+
+  try {
+    const { data, error } = await supabase
+      .from('capsule_feed')
+      .select('id, nickname, avatar_url, box_thumb_url, sealed_at, created_at')
+      .order('sealed_at', { ascending: false })
+      .limit(12);
+
+    if (error) throw error;
+    renderCapsuleFeed(data || []);
+  } catch (err) {
+    console.error('[capsule_feed] load failed', err);
+    renderCapsuleFeed([]);
+  }
+}
+
+async function saveCapsuleFeedEntry() {
+  if (!state.readyProfile || !state.sealed) return;
+  if (!state.avatarDataUrl || !state.nickname) return;
+  if (state._feedSavedOnce) return;
+  state._feedSavedOnce = true;
+
+  try {
+    const avatarBlob = dataUrlToBlob(state.avatarDataUrl);
+    const boxPngDataUrl = renderer.domElement.toDataURL('image/png');
+    const boxBlob = dataUrlToBlob(boxPngDataUrl);
+
+    const nickSlug = slugify(state.nickname);
+    const stamp = Date.now();
+    const rand = Math.random().toString(36).slice(2, 8);
+
+    const avatarExt = avatarBlob.type.includes('png') ? 'png' : avatarBlob.type.includes('webp') ? 'webp' : 'jpg';
+    const avatarPath = `avatars/${nickSlug}-${stamp}-${rand}.${avatarExt}`;
+    const boxPath = `boxes/${nickSlug}-${stamp}-${rand}.png`;
+
+    const [avatarUrl, boxThumbUrl] = await Promise.all([
+      uploadBlobToPublicBucket(avatarPath, avatarBlob, avatarBlob.type || 'image/jpeg'),
+      uploadBlobToPublicBucket(boxPath, boxBlob, 'image/png'),
+    ]);
+
+    const payload = {
+      nickname: String(state.nickname || '').trim().slice(0, 24),
+      avatar_url: avatarUrl,
+      box_thumb_url: boxThumbUrl,
+      message_length: Math.max(0, Math.min(300, getTrimmedMessageLength())),
+      sealed_at: new Date().toISOString(),
+    };
+
+    const { error } = await supabase.from('capsule_feed').insert(payload);
+    if (error) throw error;
+
+    await loadCapsuleFeed();
+  } catch (err) {
+    state._feedSavedOnce = false;
+    console.error('[capsule_feed] save failed', err);
+  }
+}
+
 ui.nicknameInput.addEventListener('input', () => {
   validateIntroForm();
   ui.statusNick.textContent = ui.nicknameInput.value.trim() || '—';
@@ -2232,6 +2375,9 @@ applyPersistedCapsuleState(loadPersistedCapsuleState());
 validateIntroForm();
 updateSealButtonState();
 
+ui.refreshFeedBtn?.addEventListener('click', loadCapsuleFeed);
+loadCapsuleFeed();
+
 ui.sealBtn.addEventListener('click', () => {
   if (!state.readyProfile || state.sealed || state.sealAnimPlaying) return;
 
@@ -2336,6 +2482,7 @@ function animateSealSequence() {
     persistCapsuleState();
     updateSealButtonState();
     updateDynamicTextures();
+    saveCapsuleFeedEntry();
   }
 
   requestAnimationFrame(step);

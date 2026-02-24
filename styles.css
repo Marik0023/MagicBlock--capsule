@@ -67,7 +67,7 @@ body::after{
 #app{
   position:relative;
   z-index:1;
-  height:100dvh;min-height:100%;display:flex;flex-direction:column;overflow:hidden;
+  height:100dvh;min-height:100%;display:flex;flex-direction:column;overflow:auto;
 }
 
 .topbar{
@@ -537,4 +537,64 @@ input[type="file"]::-webkit-file-upload-button{
   .topbar{height:60px;}
   .brand.brand-logo{max-width:min(62vw, 290px);}
   .brand.brand-logo img{max-height:34px;}
+}
+
+
+/* ---------- Public feed ---------- */
+.feed-section{
+  margin:10px;
+  margin-top:0;
+  padding:14px;
+  border-radius:20px;
+}
+.feed-head{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  margin-bottom:10px;
+}
+.feed-head h2{margin:0;font-size:16px;letter-spacing:.01em}
+.feed-head .btn{padding:8px 12px;min-height:auto}
+.feed-empty{color:var(--muted);padding:8px 2px}
+.capsule-feed-list{display:grid;gap:10px}
+.feed-row{
+  display:grid;
+  grid-template-columns:44px minmax(110px,1fr) 72px auto;
+  align-items:center;
+  gap:12px;
+  padding:10px;
+  border-radius:14px;
+  background:linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.015));
+  border:1px solid rgba(121,230,255,.10);
+}
+.feed-avatar{
+  width:44px;height:44px;border-radius:999px;object-fit:cover;display:block;
+  border:1px solid rgba(121,230,255,.25);
+  background:rgba(255,255,255,.03);
+}
+.feed-nick{
+  min-width:0;
+  font-weight:700;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.feed-box{
+  width:72px;height:52px;border-radius:10px;object-fit:cover;display:block;
+  border:1px solid rgba(255,255,255,.12);
+  background:rgba(255,255,255,.03);
+}
+.feed-date{color:var(--muted);font-size:12px;text-align:right;white-space:nowrap}
+
+@media (max-width: 960px){
+  .feed-row{
+    grid-template-columns:40px 1fr 60px;
+    grid-template-areas:
+      "avatar nick box"
+      "avatar date box";
+    gap:8px 10px;
+  }
+  .feed-avatar{grid-area:avatar;width:40px;height:40px}
+  .feed-nick{grid-area:nick}
+  .feed-box{grid-area:box;width:60px;height:44px}
+  .feed-date{grid-area:date;text-align:left;font-size:11px}
 }
