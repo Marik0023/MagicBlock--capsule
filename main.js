@@ -1036,7 +1036,7 @@ loader.load(
         state.lidControl = lidMeshNode;
         state.lidOpenQuat = lidMeshNode.quaternion.clone().normalize();
         state.lidClosedQuat = new THREE.Quaternion(); // identity = closed (for v2 export)
-        state.lidAnimT = 1; // start open
+        state.lidAnimT = state.sealed ? 0 : 1; // restore closed lid after refresh if already sealed
 
         console.info('[lid] v2 direct lid animation: open -> identity on capsule_lid');
       } else {
@@ -1175,7 +1175,7 @@ loader.load(
         }
       }
 
-      state.lidAnimT = 1; // start open
+      state.lidAnimT = state.sealed ? 0 : 1; // restore closed lid after refresh if already sealed
       }
     }
 
