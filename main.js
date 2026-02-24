@@ -701,11 +701,11 @@ function applyTextureOrientation(tex, kind = 'default') {
   // Lid screen UV in this GLB is mirrored relative to side screens.
   // IMPORTANT: negative repeat requires RepeatWrapping (with Clamp it can sample edge color -> blank screen on some GPUs).
   if (kind === 'lid') {
-    // Lid screen in this GLB needs only horizontal mirroring (NOT vertical flip),
-    // otherwise the UI becomes upside-down after the shared -90deg rotation above.
-    tex.wrapS = THREE.RepeatWrapping;
-    tex.repeat.x = -1;
-    tex.offset.x = 1;
+    // Lid screen in this GLB is still mirrored after the shared -90deg rotation.
+    // Correct fix for this model: mirror on V (Y), not U (X).
+    tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.y = -1;
+    tex.offset.y = 1;
   }
 
   tex.needsUpdate = true;
