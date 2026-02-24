@@ -229,7 +229,7 @@ body::after{
   overflow:auto;
 }
 .side-panel > .card:first-child{flex:1;display:flex;flex-direction:column;min-height:0}
-.side-panel > .card:first-child .field{flex:1;min-height:0;display:grid;grid-template-rows:auto auto 1fr auto}
+.side-panel > .card:first-child .field{flex:1;min-height:0;display:grid;grid-template-rows:auto minmax(180px,1fr) auto;align-content:start}
 .side-panel > .card:first-child textarea{min-height:200px;height:100%}
 .side-panel > .card:first-child .actions{margin-top:12px}
 .side-panel > .card.compact{margin-top:auto}
@@ -337,7 +337,7 @@ textarea{resize:none;min-height:110px;line-height:1.45}
 small,.muted{color:var(--muted);font-size:12px}
 .char-row{
   display:flex;justify-content:space-between;gap:8px;
-  color:var(--muted);font-size:12px;line-height:1.1;
+  color:var(--muted);font-size:12px;line-height:1.1;margin-top:2px;
 }
 
 .until-box{

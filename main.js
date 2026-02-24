@@ -2255,7 +2255,7 @@ async function saveSealedCapsuleToSupabase() {
       await refreshFeed();
     }
   } catch (e) {
-    // ignore
+    console.error('[CapsuleFeed] saveSealedCapsuleToSupabase error:', e);
   }
 }
 
@@ -2486,6 +2486,11 @@ function animateSealSequence() {
     persistCapsuleState();
     updateSealButtonState();
     updateDynamicTextures();
+
+    // Push sealed capsule to Supabase public feed (non-blocking)
+    saveSealedCapsuleToSupabase()
+      .then(() => loadCapsuleFeed())
+      .catch((err) => console.error('[CapsuleFeed] save after seal failed:', err));
   }
 
   requestAnimationFrame(step);
@@ -2541,5 +2546,6 @@ function tick() {
   requestAnimationFrame(tick);
 }
 
+loadCapsuleFeed().catch((err) => console.error('[CapsuleFeed] initial load failed:', err));
 resize();
 tick();
