@@ -376,7 +376,7 @@ function prepareLetterPropVisual(rootObj) {
 
   const capBox = getCapsuleBounds();
   const capSize = capBox.getSize(new THREE.Vector3());
-  const desiredMax = Math.max(0.16, Math.min(capSize.x, capSize.z) * 0.46); // slightly smaller to avoid scraping box walls
+  const desiredMax = Math.max(0.13, Math.min(capSize.x, capSize.z) * 0.34); // reduced more to avoid lid/wall clipping
 
   const s = desiredMax / maxDim;
   visual.scale.multiplyScalar(s);
@@ -417,6 +417,47 @@ function loadLetterPropModel() {
   );
 }
 
+function getButtonLaunchWorldPoint(baseCenter, baseBox, allSize) {
+  const viewerRect = ui.viewer?.getBoundingClientRect?.();
+  const btnRect = ui.sealBtn?.getBoundingClientRect?.();
+
+  if (!viewerRect || !btnRect || viewerRect.width <= 2 || viewerRect.height <= 2) return null;
+
+  // Button center (slightly biased upward) in viewport coords
+  const px = btnRect.left + btnRect.width * 0.5;
+  const py = btnRect.top + btnRect.height * 0.42;
+
+  // If button is outside viewer area (responsive layout edge-case), fallback
+  if (px < viewerRect.left - 4 || px > viewerRect.right + 4 || py < viewerRect.top - 4 || py > viewerRect.bottom + 4) {
+    return null;
+  }
+
+  const nx = ((px - viewerRect.left) / viewerRect.width) * 2 - 1;
+  const ny = -(((py - viewerRect.top) / viewerRect.height) * 2 - 1);
+
+  const origin = camera.position.clone();
+  const rayPoint = new THREE.Vector3(nx, ny, 0.2).unproject(camera);
+  const rayDir = rayPoint.sub(origin).normalize();
+
+  // Intersect a plane facing the camera, placed between camera and capsule -> looks like launch from UI button
+  const camFwd = new THREE.Vector3();
+  camera.getWorldDirection(camFwd);
+
+  const targetDepth = Math.max(0.7, camera.position.distanceTo(baseCenter) * 0.38);
+  const planePoint = origin.clone().addScaledVector(camFwd, targetDepth);
+  const denom = rayDir.dot(camFwd);
+  if (Math.abs(denom) < 1e-4) return null;
+
+  const t = planePoint.clone().sub(origin).dot(camFwd) / denom;
+  if (!Number.isFinite(t) || t <= 0) return null;
+
+  const p = origin.clone().addScaledVector(rayDir, t);
+
+  // Tiny nudge toward camera to sell the 'pop-out' and avoid immediate overlap with scene geo
+  p.addScaledVector(camFwd, -Math.max(0.02, allSize.y * 0.03));
+  return p;
+}
+
 function getLetterFlightPathPoints() {
   const allBox = getCapsuleBounds();
   const allSize = allBox.getSize(new THREE.Vector3());
@@ -431,13 +472,17 @@ function getLetterFlightPathPoints() {
   const sy = Math.max(baseSize.y, allSize.y, 0.6);
   const sz = Math.max(baseSize.z, allSize.z, 0.6);
 
-  // Keep the overall feel of the first animation, but approach the opening from a safer/higher path.
-  const start = baseCenter.clone().add(new THREE.Vector3(sx * 1.22, sy * 0.98, sz * 1.02));
-  const c1 = baseCenter.clone().add(new THREE.Vector3(sx * 0.98, sy * 1.24, sz * 0.76));
-  const c2 = baseCenter.clone().add(new THREE.Vector3(sx * 0.30, sy * 1.08, sz * 0.22));
-  const hover = baseCenter.clone().setY(baseBox.max.y + Math.max(0.14, sy * 0.22));
-  const entry = baseCenter.clone().setY(baseBox.max.y + Math.max(0.045, sy * 0.065));
-  const drop = baseCenter.clone().setY(baseBox.max.y - Math.max(0.012, Math.min(0.04, baseSize.y * 0.05)));
+  // Launch from Seal button (projected from UI into world). If unavailable -> fallback to old side start.
+  const fallbackStart = baseCenter.clone().add(new THREE.Vector3(sx * 1.18, sy * 1.02, sz * 0.98));
+  const start = getButtonLaunchWorldPoint(baseCenter, baseBox, allSize) || fallbackStart;
+
+  // Keep first-version feel, but make the route safer around the lid: come in from above and center earlier.
+  const c1 = start.clone().lerp(baseCenter, 0.22).add(new THREE.Vector3(0, sy * 0.34, 0));
+  const c2 = baseCenter.clone().add(new THREE.Vector3(sx * 0.32, sy * 1.34, sz * 0.28));
+
+  const hover = baseCenter.clone().setY(baseBox.max.y + Math.max(0.20, sy * 0.30));
+  const entry = baseCenter.clone().setY(baseBox.max.y + Math.max(0.075, sy * 0.11));
+  const drop = baseCenter.clone().setY(baseBox.max.y - Math.max(0.004, Math.min(0.018, baseSize.y * 0.025)));
 
   return { start, c1, c2, hover, entry, drop, baseCenter, allSize };
 }
@@ -452,9 +497,9 @@ function updateLetterSealFlight(globalT) {
 
   // Timeline inside the overall seal animation (slightly longer + smoother than v1)
   const appearAt = 0.018;
-  const flyEnd = 0.30;
-  const settleEnd = 0.38;
-  const dropEnd = 0.48;
+  const flyEnd = 0.31;
+  const settleEnd = 0.40;
+  const dropEnd = 0.47;
 
   if (globalT < appearAt || globalT > dropEnd) {
     prop.visible = false;
@@ -480,13 +525,13 @@ function updateLetterSealFlight(globalT) {
     tangent.copy(_letterTmpC).sub(pos).normalize();
 
     // Subtle flutter to make the motion feel more alive, but keep it safe.
-    const flutter = (1 - p) * 0.65;
-    pos.x += Math.sin(globalT * Math.PI * 9.5) * Math.max(0.004, allSize.x * 0.006) * flutter;
-    pos.y += Math.sin(globalT * Math.PI * 8.2 + 0.45) * Math.max(0.003, allSize.y * 0.0045) * flutter;
-    pos.z += Math.cos(globalT * Math.PI * 7.8) * Math.max(0.003, allSize.z * 0.005) * flutter;
+    const flutter = (1 - p) * 0.78;
+    pos.x += Math.sin(globalT * Math.PI * 10.2) * Math.max(0.004, allSize.x * 0.0055) * flutter;
+    pos.y += Math.sin(globalT * Math.PI * 8.8 + 0.45) * Math.max(0.003, allSize.y * 0.0042) * flutter;
+    pos.z += Math.cos(globalT * Math.PI * 8.4) * Math.max(0.0025, allSize.z * 0.0042) * flutter;
 
-    scaleMul = 0.88 + p * 0.14;
-    wobble = 0.9 - p * 0.4;
+    scaleMul = 0.84 + p * 0.12;
+    wobble = 1.0 - p * 0.42;
   } else if (globalT <= settleEnd) {
     const p = clamp01((globalT - flyEnd) / Math.max(1e-4, (settleEnd - flyEnd)));
     const e = easeOutCubic(p);
@@ -496,8 +541,8 @@ function updateLetterSealFlight(globalT) {
     pos.x += Math.sin(p * Math.PI * 1.9 + 0.4) * Math.max(0.003, allSize.x * 0.004) * (1 - p);
 
     tangent.copy(entry).sub(hover).normalize();
-    scaleMul = 1.01 - p * 0.03;
-    wobble = 0.30 * (1 - p);
+    scaleMul = 0.96 - p * 0.03;
+    wobble = 0.34 * (1 - p);
   } else {
     const p = clamp01((globalT - settleEnd) / Math.max(1e-4, (dropEnd - settleEnd)));
     const e = easeInOutCubic(p);
@@ -508,11 +553,11 @@ function updateLetterSealFlight(globalT) {
     pos.z += Math.cos(p * Math.PI * 1.2) * Math.max(0.0018, allSize.z * 0.0016) * (1 - p) * (1 - p);
 
     tangent.set(0, -1, 0);
-    scaleMul = 0.98 - p * 0.10;
-    wobble = 0.06 * (1 - p);
+    scaleMul = 0.93 - p * 0.08;
+    wobble = 0.05 * (1 - p);
 
-    // Hide a little early to avoid seeing the model intersect inside the box.
-    if (p > 0.80) {
+    // Hide earlier so the lid never visually intersects the letter during closing.
+    if (p > 0.58) {
       prop.visible = false;
       return;
     }
@@ -523,8 +568,8 @@ function updateLetterSealFlight(globalT) {
   // Orient roughly along motion, then add a tasteful lively flutter/bank
   const yaw = Math.atan2(tangent.x, tangent.z);
   const pitch = -Math.atan2(tangent.y, Math.max(1e-4, Math.hypot(tangent.x, tangent.z)));
-  const flutterPitch = Math.sin(globalT * Math.PI * 7.0 + 0.35) * 0.03 * wobble;
-  const flutterRoll = Math.sin(globalT * Math.PI * 5.6) * 0.05 * wobble;
+  const flutterPitch = Math.sin(globalT * Math.PI * 7.6 + 0.35) * 0.035 * wobble;
+  const flutterRoll = Math.sin(globalT * Math.PI * 6.2) * 0.06 * wobble;
 
   prop.rotation.set(
     pitch + 0.14 + flutterPitch,
@@ -533,7 +578,7 @@ function updateLetterSealFlight(globalT) {
   );
 
   // Slightly smaller overall during flight to keep it from scraping edges.
-  prop.scale.setScalar(scaleMul * 0.90);
+  prop.scale.setScalar(scaleMul * 0.82);
 }
 
 // ---------- Lid auto-solver helpers (main fix) ----------
@@ -1727,13 +1772,13 @@ function animateSealSequence() {
     }
 
     // 2) Lid closes after the letter has entered
-    const lidStart = state.letterPropReady ? 0.40 : 0.00;
-    const lidEnd = state.letterPropReady ? 0.93 : 0.84;
+    const lidStart = state.letterPropReady ? 0.54 : 0.00;
+    const lidEnd = state.letterPropReady ? 0.94 : 0.84;
     const lidPhase = clamp01((t - lidStart) / Math.max(1e-4, (lidEnd - lidStart)));
     state.lidAnimT = 1 - easeInOutCubic(lidPhase);
 
     // 3) Spin starts slightly after lid motion begins (cinematic feel)
-    const spinStart = state.letterPropReady ? 0.46 : 0.02;
+    const spinStart = state.letterPropReady ? 0.60 : 0.02;
     const spinPhase = clamp01((t - spinStart) / Math.max(1e-4, (1 - spinStart)));
     state.spinAngle = state.sealSpinTargetDelta * easeInOutCubic(spinPhase);
 
