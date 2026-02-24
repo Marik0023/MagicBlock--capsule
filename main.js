@@ -1197,6 +1197,206 @@ function drawScreenGlassBg(ctx, w, h, opts = {}) {
   ctx.restore();
 }
 
+
+function drawTabletBezelChrome(ctx, w, h, time = 0, opts = {}) {
+  const {
+    radius = 34,
+    outerPad = 2,
+    innerPad = 10,
+    bezelTint = 'rgba(170,210,255,0.16)',
+    edgeTint = 'rgba(120,220,255,0.32)',
+    cornerTint = 'rgba(184,234,255,0.46)',
+    sideButtons = true,
+    topTabs = true,
+    bottomDock = true,
+    leftButtons = 3,
+    rightButtons = 3,
+  } = opts;
+
+  // Outer metallic bezel ring
+  const metal = ctx.createLinearGradient(0, 0, w, h);
+  metal.addColorStop(0, 'rgba(46,60,80,0.36)');
+  metal.addColorStop(0.18, 'rgba(18,24,34,0.40)');
+  metal.addColorStop(0.52, bezelTint);
+  metal.addColorStop(0.84, 'rgba(22,28,40,0.38)');
+  metal.addColorStop(1, 'rgba(56,78,106,0.24)');
+  ctx.fillStyle = metal;
+  roundRect(ctx, outerPad, outerPad, w - outerPad * 2, h - outerPad * 2, radius + 4);
+  ctx.fill();
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.07)';
+  ctx.lineWidth = 2;
+  roundRect(ctx, outerPad + 1, outerPad + 1, w - (outerPad + 1) * 2, h - (outerPad + 1) * 2, radius + 3);
+  ctx.stroke();
+
+  // Inner neon rim
+  const rimG = ctx.createLinearGradient(0, 0, w, 0);
+  rimG.addColorStop(0, 'rgba(116,228,255,0.14)');
+  rimG.addColorStop(0.35, edgeTint);
+  rimG.addColorStop(0.7, 'rgba(131,151,255,0.24)');
+  rimG.addColorStop(1, 'rgba(116,228,255,0.14)');
+  ctx.strokeStyle = rimG;
+  ctx.lineWidth = 1.6;
+  roundRect(ctx, innerPad, innerPad, w - innerPad * 2, h - innerPad * 2, Math.max(8, radius - 8));
+  ctx.stroke();
+
+  // Micro scan grid clipped to screen body (under content, subtle)
+  ctx.save();
+  roundRect(ctx, innerPad + 2, innerPad + 2, w - (innerPad + 2) * 2, h - (innerPad + 2) * 2, Math.max(6, radius - 10));
+  ctx.clip();
+  ctx.strokeStyle = 'rgba(120,210,255,0.035)';
+  ctx.lineWidth = 1;
+  for (let y = innerPad + 18; y < h - innerPad - 8; y += 22) {
+    ctx.beginPath();
+    ctx.moveTo(innerPad + 8, y + ((time * 8) % 6));
+    ctx.lineTo(w - innerPad - 8, y + ((time * 8) % 6));
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // Corner bracket accents (tablet / sci-fi look)
+  ctx.strokeStyle = cornerTint;
+  ctx.lineWidth = 3;
+  const c = Math.max(18, Math.min(w, h) * 0.06);
+  const x1 = innerPad + 8, y1 = innerPad + 8;
+  const x2 = w - innerPad - 8, y2 = h - innerPad - 8;
+  const corners = [
+    [x1, y1, 1, 1],
+    [x2, y1, -1, 1],
+    [x1, y2, 1, -1],
+    [x2, y2, -1, -1],
+  ];
+  for (const [cx, cy, sx, sy] of corners) {
+    ctx.beginPath();
+    ctx.moveTo(cx + sx * c, cy);
+    ctx.lineTo(cx, cy);
+    ctx.lineTo(cx, cy + sy * c);
+    ctx.stroke();
+  }
+
+  // Decorative top tabs
+  if (topTabs) {
+    const tabY = innerPad + 4;
+    const tabW = Math.max(44, w * 0.12);
+    const gap = 10;
+    const startX = w - innerPad - tabW * 2 - gap - 20;
+    for (let i = 0; i < 2; i++) {
+      const x = startX + i * (tabW + gap);
+      const tg = ctx.createLinearGradient(x, tabY, x + tabW, tabY);
+      tg.addColorStop(0, 'rgba(111,228,255,0.12)');
+      tg.addColorStop(1, 'rgba(123,134,255,0.18)');
+      ctx.fillStyle = tg;
+      roundRect(ctx, x, tabY, tabW, 12, 6);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(173,235,255,0.18)';
+      ctx.lineWidth = 1;
+      roundRect(ctx, x, tabY, tabW, 12, 6);
+      ctx.stroke();
+    }
+  }
+
+  // Side button rails ("кнопочки")
+  const drawRail = (side = 'left', count = 3) => {
+    if (count <= 0) return;
+    const railW = Math.max(12, Math.min(18, w * 0.02));
+    const railH = h * 0.58;
+    const rx = side === 'left' ? innerPad + 4 : w - innerPad - 4 - railW;
+    const ry = (h - railH) * 0.5;
+    const rg = ctx.createLinearGradient(rx, ry, rx + railW, ry);
+    rg.addColorStop(0, 'rgba(255,255,255,0.04)');
+    rg.addColorStop(0.5, 'rgba(122,146,170,0.12)');
+    rg.addColorStop(1, 'rgba(0,0,0,0.10)');
+    ctx.fillStyle = rg;
+    roundRect(ctx, rx, ry, railW, railH, 8);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(170,220,255,0.14)';
+    ctx.lineWidth = 1;
+    roundRect(ctx, rx, ry, railW, railH, 8);
+    ctx.stroke();
+
+    const btnGap = railH / (count + 1);
+    for (let i = 0; i < count; i++) {
+      const cy = ry + btnGap * (i + 1);
+      const bx = rx + railW * 0.5;
+      const pulse = 0.45 + 0.35 * Math.sin(time * 2.1 + i * 0.9 + (side === 'left' ? 0.4 : 1.2));
+      ctx.fillStyle = `rgba(12,18,28,0.90)`;
+      ctx.beginPath();
+      ctx.arc(bx, cy, railW * 0.28, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = `rgba(150,230,255,${(0.15 + pulse * 0.45).toFixed(3)})`;
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.arc(bx, cy, railW * 0.28, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = `rgba(111,235,255,${(0.12 + pulse * 0.38).toFixed(3)})`;
+      ctx.beginPath();
+      ctx.arc(bx, cy, railW * 0.12, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  };
+  if (sideButtons) {
+    drawRail('left', leftButtons);
+    drawRail('right', rightButtons);
+  }
+
+  // Bottom dock bar (more "tablet" hardware frame)
+  if (bottomDock) {
+    const dockW = w * 0.34;
+    const dockH = 16;
+    const dockX = w * 0.5 - dockW * 0.5;
+    const dockY = h - innerPad - dockH - 3;
+    const dg = ctx.createLinearGradient(dockX, dockY, dockX + dockW, dockY);
+    dg.addColorStop(0, 'rgba(123,134,255,0.10)');
+    dg.addColorStop(0.5, 'rgba(111,228,255,0.24)');
+    dg.addColorStop(1, 'rgba(123,134,255,0.10)');
+    ctx.fillStyle = dg;
+    roundRect(ctx, dockX, dockY, dockW, dockH, 7);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(190,240,255,0.12)';
+    ctx.lineWidth = 1;
+    roundRect(ctx, dockX, dockY, dockW, dockH, 7);
+    ctx.stroke();
+
+    const segW = dockW / 5;
+    for (let i = 1; i < 5; i++) {
+      ctx.strokeStyle = 'rgba(160,220,255,0.08)';
+      ctx.beginPath();
+      ctx.moveTo(dockX + i * segW, dockY + 2);
+      ctx.lineTo(dockX + i * segW, dockY + dockH - 2);
+      ctx.stroke();
+    }
+  }
+}
+
+function drawUiPill(ctx, x, y, w, h, label, opts = {}) {
+  const {
+    active = false,
+    accent = 'rgba(111,228,255,0.22)',
+    border = 'rgba(172,232,255,0.22)',
+    text = 'rgba(208,232,255,0.72)',
+    align = 'center',
+    font = '700 12px Inter, sans-serif',
+  } = opts;
+
+  const g = ctx.createLinearGradient(x, y, x + w, y + h);
+  g.addColorStop(0, active ? accent : 'rgba(255,255,255,0.03)');
+  g.addColorStop(1, active ? 'rgba(123,134,255,0.15)' : 'rgba(255,255,255,0.01)');
+  ctx.fillStyle = g;
+  roundRect(ctx, x, y, w, h, Math.min(h / 2, 8));
+  ctx.fill();
+  ctx.strokeStyle = border;
+  ctx.lineWidth = 1;
+  roundRect(ctx, x, y, w, h, Math.min(h / 2, 8));
+  ctx.stroke();
+
+  ctx.font = font;
+  ctx.fillStyle = text;
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = align;
+  const tx = align === 'left' ? x + 8 : align === 'right' ? x + w - 8 : x + w / 2;
+  ctx.fillText(label, tx, y + h / 2 + 0.5);
+}
+
 function drawLockGlyph(ctx, x, y, size, progressClosed) {
   const p = clamp01(progressClosed);
   const bodyW = size * 0.78;
@@ -1257,6 +1457,20 @@ function drawLidScreenCanvas(ctx, w, h, time) {
     accentB: 'rgba(123,134,255,0.28)',
     inner: 'rgba(7,11,17,0.92)',
   });
+  drawTabletBezelChrome(ctx, w, h, time, {
+    radius: 44,
+    outerPad: 2,
+    innerPad: 12,
+    leftButtons: 4,
+    rightButtons: 3,
+    topTabs: true,
+    bottomDock: true,
+  });
+
+  // Small device header chips / indicators (cosmic tablet feel)
+  drawUiPill(ctx, w * 0.08, h * 0.10, w * 0.14, 28, 'SYS', { active: true, align: 'center' });
+  drawUiPill(ctx, w * 0.24, h * 0.10, w * 0.16, 28, 'LOCK', { active: state.sealed || state.sealAnimPlaying });
+  drawUiPill(ctx, w * 0.78, h * 0.10, w * 0.10, 28, 'TX', { active: true });
 
   const closeP = 1 - clamp01(state.lidAnimT);
   const sealP = state.sealAnimPlaying ? closeP : (state.sealed ? 1 : 0);
@@ -1310,6 +1524,12 @@ function drawLidScreenCanvas(ctx, w, h, time) {
   ctx.restore();
 
   // restore pre-flip wrapper
+  // Tiny footer control buttons
+  const btnBaseY = h * 0.82;
+  drawUiPill(ctx, w * 0.10, btnBaseY, w * 0.11, 24, 'A1', { active: true, font: '700 11px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.22, btnBaseY, w * 0.11, 24, 'A2', { font: '700 11px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.84, btnBaseY, w * 0.10, 24, 'OK', { active: state.sealed, font: '700 11px Inter, sans-serif' });
+
   ctx.restore();
 }
 
@@ -1324,6 +1544,26 @@ function drawNameScreenCanvas(ctx, w, h, time) {
     accentB: 'rgba(123,134,255,0.2)',
     inner: 'rgba(10,14,22,0.92)',
   });
+  drawTabletBezelChrome(ctx, w, h, time, {
+    radius: 36,
+    outerPad: 2,
+    innerPad: 12,
+    leftButtons: 3,
+    rightButtons: 4,
+    topTabs: true,
+    bottomDock: true,
+  });
+
+  // Header system pills / signal bars
+  drawUiPill(ctx, 26, 18, 118, 22, 'IDENT', { active: true, align: 'left' });
+  drawUiPill(ctx, 150, 18, 110, 22, 'SECURE', { active: true, align: 'left' });
+  const sigX = w - 170, sigY = 20;
+  for (let i = 0; i < 5; i++) {
+    const bh = 4 + i * 3;
+    ctx.fillStyle = `rgba(111,228,255,${(0.18 + 0.14 * i + 0.08 * Math.sin(time * 3 + i)).toFixed(3)})`;
+    roundRect(ctx, sigX + i * 12, sigY + (18 - bh), 8, bh, 3);
+    ctx.fill();
+  }
 
   ctx.save();
   roundRect(ctx, 8, 8, w - 16, h - 16, 32);
@@ -1371,6 +1611,12 @@ function drawNameScreenCanvas(ctx, w, h, time) {
   ctx.font = '600 18px Inter, sans-serif';
   ctx.fillStyle = 'rgba(197,221,255,0.56)';
   ctx.fillText('IDENTITY LINKED', w / 2, h * 0.2);
+
+  // Bottom functional buttons / labels
+  drawUiPill(ctx, w * 0.12, h * 0.78, w * 0.12, 24, 'SCAN', { active: true, font: '700 11px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.26, h * 0.78, w * 0.12, 24, 'SYNC', { font: '700 11px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.62, h * 0.78, w * 0.12, 24, 'NODE', { font: '700 11px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.76, h * 0.78, w * 0.12, 24, 'OK', { active: true, font: '700 11px Inter, sans-serif' });
 }
 
 function drawAvatarScreenCanvas(ctx, w, h, time) {
@@ -1382,6 +1628,21 @@ function drawAvatarScreenCanvas(ctx, w, h, time) {
     accentB: 'rgba(123,134,255,0.18)',
     inner: 'rgba(10,14,22,0.94)',
   });
+  drawTabletBezelChrome(ctx, w, h, time, {
+    radius: 56,
+    outerPad: 2,
+    innerPad: 14,
+    leftButtons: 5,
+    rightButtons: 5,
+    topTabs: true,
+    bottomDock: true,
+  });
+
+  // Top bar controls / mini buttons
+  drawUiPill(ctx, w * 0.08, h * 0.05, w * 0.18, 24, 'VISOR', { active: true, align: 'left', font: '700 11px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.28, h * 0.05, w * 0.14, 24, 'CAM', { font: '700 11px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.72, h * 0.05, w * 0.08, 24, 'A', { active: true, font: '700 11px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.82, h * 0.05, w * 0.10, 24, 'REC', { active: !!state.avatarImgLoaded, font: '700 11px Inter, sans-serif' });
 
   const pad = 48;
   const innerX = pad;
@@ -1448,6 +1709,13 @@ function drawAvatarScreenCanvas(ctx, w, h, time) {
     ctx.lineTo(cx + sx * c, cy);
     ctx.stroke();
   }
+
+  // Bottom docking controls / status buttons (tablet hardware style)
+  const dockY = h - 42;
+  drawUiPill(ctx, w * 0.10, dockY, w * 0.16, 22, 'GRID', { font: '700 10px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.28, dockY, w * 0.16, 22, 'ZOOM', { active: true, font: '700 10px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.56, dockY, w * 0.14, 22, 'HDR', { font: '700 10px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.72, dockY, w * 0.18, 22, 'SYNC OK', { active: state.avatarImgLoaded, font: '700 10px Inter, sans-serif' });
 }
 
 function renderDynamicScreens(force = false) {
