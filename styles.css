@@ -350,10 +350,15 @@ body::after {
 }
 .side-panel > .card:first-child .field {
   flex: 1; min-height: 0;
-  display: grid; grid-template-rows: auto auto 1fr auto;
+  display: flex; flex-direction: column; gap: 6px;
 }
-.side-panel > .card:first-child textarea { min-height: 120px; height: 100%; }
-.side-panel > .card:first-child .actions { margin-top: 14px; }
+.side-panel > .card:first-child .field .field-label { flex-shrink: 0; }
+.side-panel > .card:first-child textarea {
+  flex: 1; min-height: 100px; height: 0;
+}
+.side-panel > .card:first-child .char-row { flex-shrink: 0; }
+.side-panel > .card:first-child .until-box { flex-shrink: 0; }
+.side-panel > .card:first-child .actions { margin-top: 14px; flex-shrink: 0; }
 .side-panel > .card.compact { margin-top: auto; }
 
 /* ── Form Fields ── */
@@ -498,11 +503,12 @@ textarea { line-height: 1.6; }
 /* ── Until Box ── */
 .until-box {
   margin: 14px 0 0;
-  border: 1px solid rgba(89,240,255,.1);
+  border: 1px solid rgba(89,240,255,.14);
   border-radius: var(--r-md);
   padding: 12px 14px;
-  background: linear-gradient(135deg, rgba(89,240,255,.04), rgba(157,114,255,.03));
+  background: linear-gradient(135deg, rgba(89,240,255,.05), rgba(157,114,255,.04));
   position: relative; overflow: hidden;
+  flex-shrink: 0;
 }
 
 .until-box::before {
