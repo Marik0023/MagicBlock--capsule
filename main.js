@@ -1,7 +1,6 @@
 import * as THREE from "https://unpkg.com/three@0.160.1/build/three.module.js";
 import { OrbitControls } from "https://unpkg.com/three@0.160.1/examples/jsm/controls/OrbitControls.js";
 import { GLTFLoader } from "https://unpkg.com/three@0.160.1/examples/jsm/loaders/GLTFLoader.js";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const ui = {
   introModal: document.getElementById('introModal'),
@@ -25,7 +24,6 @@ const ui = {
   statusAvatar: document.getElementById('statusAvatar'),
   statusText: document.getElementById('statusText'),
   statusSeal: document.getElementById('statusSeal'),
-  feedList: document.getElementById('feedList'),
 };
 
 const state = {
@@ -88,22 +86,6 @@ const state = {
 
 const MIN_MESSAGE_CHARS = 10;
 const CAPSULE_STORAGE_KEY = 'magicblock_time_capsule_state_v1';
-
-// =========================
-// Supabase (public client)
-// =========================
-const SUPABASE_URL = 'https://dzamfjphmomvkepirxoh.supabase.co';
-const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_S05m0mHe9SnvWeoU9MZmVA_qZl-K6Q8';
-
-const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
-  auth: {
-    persistSession: false,
-    autoRefreshToken: false,
-    detectSessionInUrl: false,
-  },
-});
-
-window.__capsuleSupabase = supabase;
 
 function getTrimmedMessageLength(value = state.message) {
   return String(value || '').trim().length;
@@ -2129,138 +2111,6 @@ function slugify(v) {
     .replace(/^-+|-+$/g, '') || 'user';
 }
 
-// ---------- Supabase helpers ----------
-function escapeHtml(str) {
-  return String(str)
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
-}
-function escapeAttr(str) {
-  // basic attribute escape
-  return escapeHtml(str).replaceAll('`', '&#96;');
-}
-function dataUrlToBlob(dataUrl) {
-  const [meta, b64] = dataUrl.split(',');
-  const mime = (meta.match(/data:([^;]+);base64/) || [])[1] || 'application/octet-stream';
-  const bin = atob(b64);
-  const len = bin.length;
-  const bytes = new Uint8Array(len);
-  for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i);
-  return new Blob([bytes], { type: mime });
-}
-
-function safePublicUrl(bucket, path) {
-  try {
-    const { data } = supabase.storage.from(bucket).getPublicUrl(path);
-    return data?.publicUrl || '';
-  } catch {
-    return '';
-  }
-}
-
-function formatDateTime(d) {
-  try {
-    const dt = new Date(d);
-    return dt.toLocaleString(undefined, { year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-  } catch {
-    return '';
-  }
-}
-
-async function refreshFeed() {
-  if (!ui.feedList) return;
-
-  const { data, error } = await supabase
-    .from('capsule_feed')
-    .select('id,nickname,avatar_url,box_thumb_url,sealed_at,created_at')
-    .order('sealed_at', { ascending: false })
-    .limit(24);
-
-  if (error) {
-    ui.feedList.innerHTML = '<div class="feed-empty muted">Feed unavailable.</div>';
-    return;
-  }
-
-  if (!data || data.length === 0) {
-    ui.feedList.innerHTML = '<div class="feed-empty muted">No sealed capsules yet.</div>';
-    return;
-  }
-
-  ui.feedList.innerHTML = data
-    .map((row) => {
-      const dateStr = formatDateTime(row.sealed_at || row.created_at);
-      const nick = escapeHtml(row.nickname || 'Anonymous');
-      const av = escapeAttr(row.avatar_url || '');
-      const thumb = escapeAttr(row.box_thumb_url || '');
-      return `
-        <div class="feed-item">
-          <div class="feed-row">
-            <div class="feed-user">
-              <img class="feed-avatar" src="${av}" alt="avatar" loading="lazy" />
-              <div class="feed-nick" title="${nick}">${nick}</div>
-            </div>
-            <div class="feed-date">${escapeHtml(dateStr)}</div>
-          </div>
-          <img class="feed-thumb" src="${thumb}" alt="sealed capsule" loading="lazy" />
-        </div>
-      `;
-    })
-    .join('');
-}
-
-async function saveSealedCapsuleToSupabase() {
-  // Requires public storage bucket 'capsule-public' and table 'capsule_feed'
-  try {
-    const nowId = (crypto?.randomUUID ? crypto.randomUUID() : String(Date.now()) + '-' + Math.random().toString(16).slice(2));
-    const bucket = 'capsule-public';
-
-    const avatarData = state.avatarDataUrl || '';
-    const thumbData = renderer?.domElement?.toDataURL?.('image/png') || '';
-
-    if (!avatarData || !thumbData) return;
-
-    const avatarPath = `avatars/${nowId}.png`;
-    const thumbPath = `thumbs/${nowId}.png`;
-
-    const avatarBlob = dataUrlToBlob(avatarData);
-    const thumbBlob = dataUrlToBlob(thumbData);
-
-    // Upload (public read; insert allowed via storage policy)
-    const up1 = await supabase.storage.from(bucket).upload(avatarPath, avatarBlob, { contentType: 'image/png', upsert: false });
-    const up2 = await supabase.storage.from(bucket).upload(thumbPath, thumbBlob, { contentType: 'image/png', upsert: false });
-
-    // If upload fails because file exists, fall back to upsert
-    if (up1.error) {
-      await supabase.storage.from(bucket).upload(avatarPath, avatarBlob, { contentType: 'image/png', upsert: true });
-    }
-    if (up2.error) {
-      await supabase.storage.from(bucket).upload(thumbPath, thumbBlob, { contentType: 'image/png', upsert: true });
-    }
-
-    const avatarUrl = safePublicUrl(bucket, avatarPath);
-    const boxThumbUrl = safePublicUrl(bucket, thumbPath);
-
-    const { error: insErr } = await supabase.from('capsule_feed').insert({
-      nickname: state.nickname || '',
-      avatar_url: avatarUrl,
-      box_thumb_url: boxThumbUrl,
-      message_length: getTrimmedMessageLength(),
-      sealed_at: new Date().toISOString(),
-    });
-
-    if (!insErr) {
-      await refreshFeed();
-    }
-  } catch (e) {
-    console.error('[CapsuleFeed] saveSealedCapsuleToSupabase error:', e);
-  }
-}
-
-
-
 ui.nicknameInput.addEventListener('input', () => {
   validateIntroForm();
   ui.statusNick.textContent = ui.nicknameInput.value.trim() || '—';
@@ -2486,11 +2336,6 @@ function animateSealSequence() {
     persistCapsuleState();
     updateSealButtonState();
     updateDynamicTextures();
-
-    // Push sealed capsule to Supabase public feed (non-blocking)
-    saveSealedCapsuleToSupabase()
-      .then(() => loadCapsuleFeed())
-      .catch((err) => console.error('[CapsuleFeed] save after seal failed:', err));
   }
 
   requestAnimationFrame(step);
@@ -2546,6 +2391,5 @@ function tick() {
   requestAnimationFrame(tick);
 }
 
-loadCapsuleFeed().catch((err) => console.error('[CapsuleFeed] initial load failed:', err));
 resize();
 tick();
