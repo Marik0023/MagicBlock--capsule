@@ -511,6 +511,8 @@ function getLetterFlightPathPoints() {
 const _letterTmpA = new THREE.Vector3();
 const _letterTmpB = new THREE.Vector3();
 const _letterTmpC = new THREE.Vector3();
+const _letterQuatTarget = new THREE.Quaternion();
+const _letterEulerTarget = new THREE.Euler();
 
 function updateLetterSealFlight(globalT) {
   const prop = state.letterProp;
@@ -519,10 +521,10 @@ function updateLetterSealFlight(globalT) {
   // Longer, more natural sequence:
   // 1) appear from button -> 2) side sweep -> 3) live drop into box -> 4) bounce/settle (no pop/disappear)
   const appearAt = 0.016;
-  const sideFlyEnd = 0.30;
-  const sweepEnd = 0.43;
-  const dropEnd = 0.60;
-  const settleEnd = 0.72;
+  const sideFlyEnd = 0.34;
+  const sweepEnd = 0.49;
+  const dropEnd = 0.68;
+  const settleEnd = 0.84;
 
   const {
     start, c1, c2, sideApproach, sideHover,
@@ -540,9 +542,9 @@ function updateLetterSealFlight(globalT) {
   let pos = _letterTmpA;
   let tangent = _letterTmpB.set(0, 0, -1);
   let scaleMul = 0.80;
-  let wobble = 0.28;
-  let basePitchAdd = 0.10;
-  let baseRoll = -0.12;
+  let wobble = 0.06;
+  let basePitchAdd = 0.08;
+  let baseRoll = -0.05;
 
   if (globalT <= sideFlyEnd) {
     // Button -> side of capsule (visible "launch from button")
@@ -555,15 +557,15 @@ function updateLetterSealFlight(globalT) {
     cubicBezierVec3(_letterTmpC, start, c1, c2, sideApproach, p2);
     tangent.copy(_letterTmpC).sub(pos).normalize();
 
-    const flutter = (1 - p) * 0.55 + 0.08;
-    pos.x += Math.sin(globalT * Math.PI * 6.2) * Math.max(0.0035, sx * 0.006) * flutter;
-    pos.y += Math.sin(globalT * Math.PI * 5.3 + 0.5) * Math.max(0.0025, sy * 0.0045) * flutter;
-    pos.z += Math.cos(globalT * Math.PI * 5.8) * Math.max(0.0025, sz * 0.0045) * flutter;
+    const flutter = (1 - p) * 0.12 + 0.015;
+    pos.x += Math.sin(globalT * Math.PI * 2.0) * Math.max(0.0007, sx * 0.0012) * flutter;
+    pos.y += Math.sin(globalT * Math.PI * 1.8 + 0.5) * Math.max(0.0006, sy * 0.0010) * flutter;
+    pos.z += Math.cos(globalT * Math.PI * 2.2) * Math.max(0.0006, sz * 0.0010) * flutter;
 
     scaleMul = 0.76 + p * 0.13;
-    wobble = 0.48 - p * 0.18;
-    basePitchAdd = 0.14;
-    baseRoll = -0.17;
+    wobble = 0.10 - p * 0.03;
+    basePitchAdd = 0.11;
+    baseRoll = -0.06;
   } else if (globalT <= sweepEnd) {
     // Side approach -> opening (enters from the side, not from above)
     const p = clamp01((globalT - sideFlyEnd) / Math.max(1e-4, (sweepEnd - sideFlyEnd)));
@@ -573,35 +575,35 @@ function updateLetterSealFlight(globalT) {
 
     // A small "banking turn" and gentle drift toward the entry point
     pos.lerp(entry, p * 0.45);
-    pos.y += Math.sin(p * Math.PI * 1.4) * Math.max(0.0025, sy * 0.0038) * (1 - p);
-    pos.z += Math.sin(p * Math.PI * 1.5 + 0.6) * Math.max(0.0018, sz * 0.0032) * (1 - p);
+    pos.y += Math.sin(p * Math.PI * 1.1) * Math.max(0.0008, sy * 0.0014) * (1 - p);
+    pos.z += Math.sin(p * Math.PI * 1.0 + 0.6) * Math.max(0.0007, sz * 0.0012) * (1 - p);
 
     tangent.copy(entry).sub(sideApproach).normalize();
 
     scaleMul = 0.89 + p * 0.03;
-    wobble = 0.24 - p * 0.10;
-    basePitchAdd = 0.10;
-    baseRoll = -0.10 + p * 0.10;
+    wobble = 0.06 - p * 0.02;
+    basePitchAdd = 0.07;
+    baseRoll = -0.03 + p * 0.03;
   } else if (globalT <= dropEnd) {
     // Live drop inside the box (no disappearance)
     const p = clamp01((globalT - sweepEnd) / Math.max(1e-4, (dropEnd - sweepEnd)));
-    const e = p * p * p;
+    const e = easeInOutCubic(p);
 
     // Curved fall toward inside center + slight drift
     pos.copy(entry).lerp(innerMid, e);
 
     // More alive fall (small flutter/tumble while losing energy)
     const alive = (1 - p);
-    pos.x += Math.sin(globalT * Math.PI * 6.0 + 0.4) * Math.max(0.0015, sx * 0.0026) * alive * alive;
-    pos.z += Math.sin(globalT * Math.PI * 5.2) * Math.max(0.0015, sz * 0.0024) * alive * alive;
-    pos.y += Math.sin(p * Math.PI * 2.0) * Math.max(0.0025, sy * 0.0038) * alive * 0.35;
+    pos.x += Math.sin(globalT * Math.PI * 2.2 + 0.4) * Math.max(0.0005, sx * 0.0009) * alive * alive;
+    pos.z += Math.sin(globalT * Math.PI * 2.0) * Math.max(0.0005, sz * 0.0009) * alive * alive;
+    pos.y += Math.sin(p * Math.PI * 1.2) * Math.max(0.0008, sy * 0.0012) * alive * 0.20;
 
     tangent.set(0.12, -1, 0.08).normalize();
 
     scaleMul = 0.92 - p * 0.03;
-    wobble = 0.10 + alive * 0.06;
-    basePitchAdd = 0.02 - p * 0.14;
-    baseRoll = 0.02 + p * 0.10;
+    wobble = 0.035 + alive * 0.02;
+    basePitchAdd = 0.01 - p * 0.08;
+    baseRoll = 0.01 + p * 0.04;
   } else if (globalT <= settleEnd) {
     // Bounce and settle on the bottom (still visible)
     const p = clamp01((globalT - dropEnd) / Math.max(1e-4, (settleEnd - dropEnd)));
@@ -610,28 +612,28 @@ function updateLetterSealFlight(globalT) {
     pos.copy(innerMid).lerp(land, e);
 
     // Tiny bounce that decays quickly
-    const bounce = Math.sin(p * Math.PI * 1.7) * (1 - p) * (1 - p);
-    pos.y += Math.max(0, bounce) * Math.max(0.005, baseSize.y * 0.010);
+    const bounce = Math.sin(p * Math.PI * 1.25) * (1 - p) * (1 - p);
+    pos.y += Math.max(0, bounce) * Math.max(0.0012, baseSize.y * 0.0025);
 
-    // Slight skid/settle on the bottom plane
-    pos.x += Math.sin(p * Math.PI * 1.2 + 0.8) * Math.max(0.0012, sx * 0.0018) * (1 - p);
-    pos.z += Math.cos(p * Math.PI * 1.1) * Math.max(0.0012, sz * 0.0016) * (1 - p);
+    // Very subtle settle drift on the bottom plane
+    pos.x += Math.sin(p * Math.PI * 0.9 + 0.8) * Math.max(0.00035, sx * 0.00055) * (1 - p);
+    pos.z += Math.cos(p * Math.PI * 0.8) * Math.max(0.00035, sz * 0.00050) * (1 - p);
 
     tangent.copy(land).sub(innerMid);
     if (tangent.lengthSq() < 1e-5) tangent.set(0, -1, 0);
     tangent.normalize();
 
     scaleMul = 0.89;
-    wobble = 0.08 * (1 - p);
-    basePitchAdd = -0.12 - p * 0.08;
-    baseRoll = 0.10 * (1 - p);
+    wobble = 0.02 * (1 - p);
+    basePitchAdd = -0.10 - p * 0.05;
+    baseRoll = 0.02 * (1 - p);
   } else {
     // Keep the letter visible inside the box until the lid closes over it.
     pos.copy(land);
     tangent.set(0, 0, 1);
     scaleMul = 0.89;
-    wobble = 0.01;
-    basePitchAdd = -0.20;
+    wobble = 0.0;
+    basePitchAdd = -0.16;
     baseRoll = 0.0;
   }
 
@@ -641,18 +643,24 @@ function updateLetterSealFlight(globalT) {
   const yaw = Math.atan2(tangent.x, tangent.z);
   const pitch = -Math.atan2(tangent.y, Math.max(1e-4, Math.hypot(tangent.x, tangent.z)));
 
-  const flutterPitch = Math.sin(globalT * Math.PI * 4.2 + 0.35) * 0.024 * wobble;
-  const flutterRoll = Math.sin(globalT * Math.PI * 3.8 + 0.15) * 0.038 * wobble;
-  const flutterYaw = Math.cos(globalT * Math.PI * 3.2) * 0.018 * wobble;
+  const flutterPitch = Math.sin(globalT * Math.PI * 1.6 + 0.35) * 0.006 * wobble;
+  const flutterRoll = Math.sin(globalT * Math.PI * 1.4 + 0.15) * 0.010 * wobble;
+  const flutterYaw = Math.cos(globalT * Math.PI * 1.2) * 0.005 * wobble;
 
-  prop.rotation.set(
+  _letterEulerTarget.set(
     pitch + basePitchAdd + flutterPitch,
     yaw + Math.PI * 0.5 + flutterYaw,
     baseRoll + flutterRoll
   );
+  _letterQuatTarget.setFromEuler(_letterEulerTarget);
+  if (globalT <= appearAt + 0.02) {
+    prop.quaternion.copy(_letterQuatTarget);
+  } else {
+    prop.quaternion.slerp(_letterQuatTarget, 0.12);
+  }
 
   // Slightly smaller overall during flight to keep it from scraping the lid/opening.
-  prop.scale.setScalar(scaleMul * 0.78);
+  prop.scale.setScalar(scaleMul * 0.76);
 }
 
 // ---------- Lid auto-solver helpers (main fix) ----------
@@ -1827,7 +1835,7 @@ ui.downloadBtn.addEventListener('click', () => {
 // ---------- Seal animation ----------
 function animateSealSequence() {
   const start = performance.now();
-  const duration = state.letterPropReady ? 6600 : 3600;
+  const duration = state.letterPropReady ? 7400 : 3800;
 
   // Keep final pose the same as before, but add a full 360° spin on top.
   const finalPoseDelta = 0; // stop facing front after full 360 spin
@@ -1846,13 +1854,13 @@ function animateSealSequence() {
     }
 
     // 2) Lid closes later, after the letter is clearly inside the box
-    const lidStart = state.letterPropReady ? 0.70 : 0.00;
-    const lidEnd = state.letterPropReady ? 0.95 : 0.84;
+    const lidStart = state.letterPropReady ? 0.76 : 0.00;
+    const lidEnd = state.letterPropReady ? 0.97 : 0.86;
     const lidPhase = clamp01((t - lidStart) / Math.max(1e-4, (lidEnd - lidStart)));
     state.lidAnimT = 1 - easeInOutCubic(lidPhase);
 
     // 3) Spin starts after lid motion is underway
-    const spinStart = state.letterPropReady ? 0.78 : 0.02;
+    const spinStart = state.letterPropReady ? 0.84 : 0.05;
     const spinPhase = clamp01((t - spinStart) / Math.max(1e-4, (1 - spinStart)));
     state.spinAngle = state.sealSpinTargetDelta * easeInOutCubic(spinPhase);
 
