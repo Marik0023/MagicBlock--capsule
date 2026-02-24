@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="uk">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -15,27 +15,27 @@
   <div id="app">
     <div id="introModal" class="modal is-open" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
       <div class="modal-card">
-        <h1 id="modalTitle">Підготуй капсулу часу</h1>
-        <p class="muted">Спочатку введи нік та додай аватар. Без цього далі не пустить.</p>
+        <h1 id="modalTitle">Prepare your time capsule</h1>
+        <p class="muted">First enter your nickname and add an avatar. You cannot continue without both.</p>
 
         <form id="introForm" class="form-grid">
           <label class="field">
-            <span>Нікнейм <b>*</b></span>
-            <input id="nicknameInput" type="text" maxlength="24" placeholder="Наприклад: Markiian Sora" required />
-            <small id="nickHint">Рекомендовано до 16 символів для гарного вигляду на кейсі</small>
+            <span>Nickname <b>*</b></span>
+            <input id="nicknameInput" type="text" maxlength="24" placeholder="Example: Markiian Sora" required />
+            <small id="nickHint">Recommended: up to 16 characters for the best look on the capsule</small>
           </label>
 
           <label class="field">
-            <span>Аватар <b>*</b></span>
+            <span>Avatar <b>*</b></span>
             <input id="avatarInput" type="file" accept="image/png,image/jpeg,image/webp" required />
-            <small>PNG / JPG / WEBP, до 5MB</small>
+            <small>PNG / JPG / WEBP, up to 5MB</small>
           </label>
 
           <div class="avatar-preview-wrap">
             <div class="avatar-preview" id="avatarPreview">No avatar</div>
           </div>
 
-          <button id="startBtn" class="btn btn-primary" type="submit" disabled>Продовжити</button>
+          <button id="startBtn" class="btn btn-primary" type="submit" disabled>Continue</button>
         </form>
       </div>
     </div>
@@ -53,7 +53,8 @@
         <div id="viewer"></div>
         <div class="viewer-overlay hidden" id="sealedOverlay">
           <div class="seal-badge">SEALED</div>
-          <p>Капсулу запечатано до TGE</p>
+          <p>Capsule sealed until TGE</p>
+          <button id="sealedViewBtn" class="btn btn-ghost overlay-btn" type="button">OK · View Capsule</button>
         </div>
       </section>
 
@@ -61,15 +62,15 @@
         <div class="card">
           <h2>Message for the future</h2>
           <label class="field">
-            <span>Текст (до 300 символів)</span>
-            <textarea id="messageInput" maxlength="300" rows="7" placeholder="Напиши повідомлення, яке залишиться в капсулі..."></textarea>
-            <div class="char-row"><span>Emoji можна ✅</span><span id="charCount">0 / 300</span></div>
+            <span>Message (up to 300 characters)</span>
+            <textarea id="messageInput" maxlength="300" rows="7" placeholder="Write a message that will stay inside the capsule..."></textarea>
+            <div class="char-row"><span>Emoji supported ✅</span><span id="charCount">0 / 300</span></div>
           </label>
 
           <div class="until-box">
             <div class="until-title">Until the...</div>
             <div class="until-value">TGE</div>
-            <div class="until-note">Дата відкриття з’явиться пізніше</div>
+            <div class="until-note">Opening date will appear later</div>
           </div>
 
           <div class="actions">
@@ -79,12 +80,12 @@
         </div>
 
         <div class="card compact">
-          <h3>Статус</h3>
+          <h3>Status</h3>
           <ul class="status-list">
-            <li><span>Нік</span><b id="statusNick">—</b></li>
-            <li><span>Аватар</span><b id="statusAvatar">—</b></li>
-            <li><span>Текст</span><b id="statusText">0 / 300</b></li>
-            <li><span>Капсула</span><b id="statusSeal">Open</b></li>
+            <li><span>Nickname</span><b id="statusNick">—</b></li>
+            <li><span>Avatar</span><b id="statusAvatar">—</b></li>
+            <li><span>Message</span><b id="statusText">0 / 300</b></li>
+            <li><span>Capsule</span><b id="statusSeal">Open</b></li>
           </ul>
         </div>
       </aside>
@@ -99,6 +100,6 @@
       }
     }
   </script>
-  <script type="module" src="./main.js?v=centerfix8"></script>
+  <script type="module" src="./main.js?v=final-en-screens-idle1"></script>
 </body>
 </html>
