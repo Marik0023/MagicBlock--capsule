@@ -59,7 +59,7 @@ const state = {
   rootBaseRotY: 0,
   spinAngle: 0,
 
-  // one-way spin during seal (avoid "туда-сюда")
+  // one-way spin during seal (avoid back-and-forth wobble)
   sealSpinTargetDelta: 0,
   sealSpinCommitted: false,
 
@@ -584,7 +584,7 @@ function updateLetterSealFlight(globalT) {
   const pos = _letterTmpA;
   const tangent = _letterTmpB.set(0, 0, 1);
 
-  // Stable orientation presets (avoids yaw wrap / slerp flip "туда-сюда")
+  // Stable orientation presets (avoids yaw wrap / slerp flip wobble)
   const qLaunch = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.10, Math.PI * 0.62, -0.03));
   const qEntry  = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.02, Math.PI * 0.56,  0.00));
   const qLand   = new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.16, Math.PI * 0.53, 0.00));
@@ -691,7 +691,7 @@ function computeBoxesForCapsule() {
 /**
  * Finds the best synthetic "closed" quaternion for Bone_00 by geometry scoring.
  * Goal:
- *  - no X/Z slide ("кришка їде назад")
+ *  - no X/Z slide (lid should not drift backward)
  *  - minimal Y gap to base (more closed)
  */
 function autoSolveClosedLidQuat({
@@ -1063,7 +1063,7 @@ loader.load(
   undefined,
   (err) => {
     console.error('GLB load error', err);
-    alert('Не вдалося завантажити 3D модель. Перевір, що сайт відкритий через локальний сервер або GitHub Pages.');
+    alert('Failed to load the 3D model. Make sure the site is opened via a local server or GitHub Pages.');
   }
 );
 
@@ -1295,7 +1295,7 @@ function drawTabletBezelChrome(ctx, w, h, time = 0, opts = {}) {
     }
   }
 
-  // Side button rails ("кнопочки")
+  // Side button rails (buttons)
   const drawRail = (side = 'left', count = 3) => {
     if (count <= 0) return;
     const railW = Math.max(12, Math.min(18, w * 0.02));
@@ -1977,14 +1977,14 @@ ui.avatarInput.addEventListener('change', async () => {
 
   const allowed = ['image/png', 'image/jpeg', 'image/webp'];
   if (!allowed.includes(file.type)) {
-    alert('Дозволені тільки PNG/JPG/WEBP');
+    alert('Only PNG / JPG / WEBP files are allowed');
     ui.avatarInput.value = '';
     validateIntroForm();
     return;
   }
 
   if (file.size > 5 * 1024 * 1024) {
-    alert('Файл завеликий. Максимум 5MB');
+    alert('File is too large. Maximum size is 5MB');
     ui.avatarInput.value = '';
     validateIntroForm();
     return;
@@ -2004,7 +2004,7 @@ ui.avatarInput.addEventListener('change', async () => {
     ui.statusAvatar.textContent = 'OK';
   } catch (err) {
     console.error('Avatar read error', err);
-    alert('Не вдалося прочитати аватар');
+    alert('Failed to read the avatar file');
   }
 });
 
@@ -2015,7 +2015,7 @@ ui.introForm.addEventListener('submit', async (e) => {
   const pickedFile = ui.avatarInput.files?.[0] || null;
 
   if (!nick || (!state.avatarDataUrl && !pickedFile)) {
-    alert('Введи нік і додай аватар 🫡');
+    alert('Enter a nickname and upload an avatar 🫡');
     return;
   }
 
@@ -2023,11 +2023,11 @@ ui.introForm.addEventListener('submit', async (e) => {
     try {
       const typeOk = ['image/png', 'image/jpeg', 'image/webp'].includes(pickedFile.type);
       if (!typeOk) {
-        alert('Аватар має бути PNG / JPG / WEBP');
+        alert('Avatar must be PNG / JPG / WEBP');
         return;
       }
       if (pickedFile.size > 5 * 1024 * 1024) {
-        alert('Файл завеликий (макс 5MB)');
+        alert('File is too large (max 5MB)');
         return;
       }
 
@@ -2044,7 +2044,7 @@ ui.introForm.addEventListener('submit', async (e) => {
       ui.statusAvatar.textContent = 'OK';
     } catch (err) {
       console.error('Avatar fallback read error', err);
-      alert('Не вдалося прочитати аватар. Спробуй інший PNG/JPG/WebP');
+      alert('Failed to read the avatar file. Try another PNG / JPG / WEBP file');
       return;
     }
   }
