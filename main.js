@@ -591,6 +591,13 @@ function updateLetterSealFlight(globalT) {
 
   let scaleMul = 0.60;
 
+  // One-way slow rotation layered on top of the base orientation (no wobble / no back-and-forth).
+  const motionSpinP = clamp01((Math.min(globalT, landEnd) - appearAt) / Math.max(1e-4, (landEnd - appearAt)));
+  const motionSpinE = easeInOutCubic(motionSpinP);
+  // Clear, slow one-way rotation in the air (visible but still calm)
+  const extraYawRad = THREE.MathUtils.degToRad(120) * motionSpinE;
+  const extraRollRad = THREE.MathUtils.degToRad(-10) * motionSpinE;
+
   function evalCurve(p0, p1, p2, p3, tt, outPos, outTan) {
     const t0 = THREE.MathUtils.clamp(tt, 0, 1);
     const t1 = THREE.MathUtils.clamp(tt + 0.012, 0, 1);
@@ -626,6 +633,14 @@ function updateLetterSealFlight(globalT) {
     prop.quaternion.copy(qLand);
   }
 
+  // Apply a deterministic, smooth one-way spin while the letter travels to the box.
+  // Use world-yaw + local-roll so the rotation is clearly visible and never flips.
+  const qWorldYaw = _letterQuatTarget;
+  qWorldYaw.setFromAxisAngle(new THREE.Vector3(0, 1, 0), extraYawRad);
+  prop.quaternion.premultiply(qWorldYaw);
+  const qLocalRoll = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), extraRollRad);
+  prop.quaternion.multiply(qLocalRoll);
+
   prop.position.copy(pos);
 
   // Keep a tiny safety floor inside the box to avoid z-fighting/penetration illusion.
@@ -633,7 +648,7 @@ function updateLetterSealFlight(globalT) {
   if (prop.position.y < minInsideY) prop.position.y = minInsideY;
 
   // Slightly smaller and stable scale (no pulsing)
-  prop.scale.setScalar(scaleMul * 0.66);
+  prop.scale.setScalar(scaleMul * 0.82);
 }
 
 // ---------- Lid auto-solver helpers (main fix) ----------
@@ -1808,7 +1823,7 @@ ui.downloadBtn.addEventListener('click', () => {
 // ---------- Seal animation ----------
 function animateSealSequence() {
   const start = performance.now();
-  const duration = state.letterPropReady ? 7600 : 3800;
+  const duration = state.letterPropReady ? 8600 : 4000;
 
   // Keep final pose the same as before, but add a full 360° spin on top.
   const finalPoseDelta = 0; // stop facing front after full 360 spin
@@ -1827,15 +1842,16 @@ function animateSealSequence() {
       updateLetterSealFlight(t);
     }
 
-    // 2) Lid closes later, after the letter is clearly inside the box
-    const lidStart = state.letterPropReady ? 0.80 : 0.00;
-    const lidEnd = state.letterPropReady ? 0.965 : 0.86;
+    // 2) Lid closes later, and a bit longer/smoother while the box is rotating
+    const lidStart = state.letterPropReady ? 0.76 : 0.00;
+    const lidEnd = state.letterPropReady ? 0.95 : 0.88;
     const lidPhase = clamp01((t - lidStart) / Math.max(1e-4, (lidEnd - lidStart)));
     state.lidAnimT = 1 - easeInOutCubic(lidPhase);
 
-    // 3) Spin starts after lid motion is underway
-    const spinStart = state.letterPropReady ? 0.96 : 0.05;
-    const spinPhase = clamp01((t - spinStart) / Math.max(1e-4, (1 - spinStart)));
+    // 3) Spin starts during the lid close and continues longer (no late fast snap)
+    const spinStart = state.letterPropReady ? 0.78 : 0.05;
+    const spinEnd = state.letterPropReady ? 0.995 : 0.92;
+    const spinPhase = clamp01((t - spinStart) / Math.max(1e-4, (spinEnd - spinStart)));
     state.spinAngle = state.sealSpinTargetDelta * easeInOutCubic(spinPhase);
 
     renderDynamicScreens();
