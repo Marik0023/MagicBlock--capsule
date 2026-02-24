@@ -261,7 +261,7 @@ function computeBoxesForCapsule() {
 /**
  * Finds the best synthetic "closed" quaternion for Bone_00 by geometry scoring.
  * Goal:
- *  - no X/Z slide ("кришка їде назад")
+ *  - no X/Z slide (lid goes backward)
  *  - minimal Y gap to base (more closed)
  */
 function autoSolveClosedLidQuat({
@@ -613,7 +613,7 @@ loader.load(
   undefined,
   (err) => {
     console.error('GLB load error', err);
-    alert('Не вдалося завантажити 3D модель. Перевір, що сайт відкритий через локальний сервер або GitHub Pages.');
+    alert('Failed to load the 3D model. Check that the site is opened via a local server or GitHub Pages.');
   }
 );
 
@@ -1183,14 +1183,14 @@ ui.avatarInput.addEventListener('change', async () => {
 
   const allowed = ['image/png', 'image/jpeg', 'image/webp'];
   if (!allowed.includes(file.type)) {
-    alert('Дозволені тільки PNG/JPG/WEBP');
+    alert('Only PNG/JPG/WEBP files are allowed');
     ui.avatarInput.value = '';
     validateIntroForm();
     return;
   }
 
   if (file.size > 5 * 1024 * 1024) {
-    alert('Файл завеликий. Максимум 5MB');
+    alert('File is too large. Maximum size is 5MB');
     ui.avatarInput.value = '';
     validateIntroForm();
     return;
@@ -1209,7 +1209,7 @@ ui.avatarInput.addEventListener('change', async () => {
     ui.statusAvatar.textContent = 'OK';
   } catch (err) {
     console.error('Avatar read error', err);
-    alert('Не вдалося прочитати аватар');
+    alert('Failed to read avatar');
   }
 });
 
@@ -1220,7 +1220,7 @@ ui.introForm.addEventListener('submit', async (e) => {
   const pickedFile = ui.avatarInput.files?.[0] || null;
 
   if (!nick || (!state.avatarDataUrl && !pickedFile)) {
-    alert('Введи нік і додай аватар 🫡');
+    alert('Enter a nickname and add an avatar 🫡');
     return;
   }
 
@@ -1228,11 +1228,11 @@ ui.introForm.addEventListener('submit', async (e) => {
     try {
       const typeOk = ['image/png', 'image/jpeg', 'image/webp'].includes(pickedFile.type);
       if (!typeOk) {
-        alert('Аватар має бути PNG / JPG / WEBP');
+        alert('Avatar must be PNG / JPG / WEBP');
         return;
       }
       if (pickedFile.size > 5 * 1024 * 1024) {
-        alert('Файл завеликий (макс 5MB)');
+        alert('File is too large (max 5MB)');
         return;
       }
 
@@ -1248,7 +1248,7 @@ ui.introForm.addEventListener('submit', async (e) => {
       ui.statusAvatar.textContent = 'OK';
     } catch (err) {
       console.error('Avatar fallback read error', err);
-      alert('Не вдалося прочитати аватар. Спробуй інший PNG/JPG/WebP');
+      alert('Failed to read avatar. Try another PNG/JPG/WebP file');
       return;
     }
   }
