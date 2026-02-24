@@ -192,7 +192,11 @@ function applyPersistedCapsuleState(saved) {
 
   if (saved.message) {
     state.message = saved.message;
-    ui.messageInput.value = saved.message;
+    // Privacy UX: once sealed, keep the text stored but do not show it again in the textarea.
+    ui.messageInput.value = saved.sealed ? '' : saved.message;
+    if (saved.sealed) {
+      ui.messageInput.placeholder = 'Message sealed';
+    }
   }
 
   state.overlayDismissedOnSealed = !!saved.overlayDismissedOnSealed;
@@ -2241,6 +2245,10 @@ ui.sealBtn.addEventListener('click', () => {
   setSealedOverlayVisible(false);
   state.sealAnimPlaying = true;
   state.overlayDismissedOnSealed = false;
+  // Hide the message in the textarea immediately after sealing starts, but keep it in state/localStorage.
+  ui.messageInput.value = '';
+  ui.messageInput.placeholder = 'Message sealed';
+  ui.messageInput.disabled = true;
   updateSealButtonState();
   ui.statusSeal.textContent = 'Sealing...';
 
@@ -2322,6 +2330,8 @@ function animateSealSequence() {
     setSealedOverlayVisible(true, { showOk: true, blocking: true });
     ui.downloadBtn.classList.remove('hidden');
     ui.messageInput.disabled = true;
+    ui.messageInput.value = '';
+    ui.messageInput.placeholder = 'Message sealed';
 
     persistCapsuleState();
     updateSealButtonState();
