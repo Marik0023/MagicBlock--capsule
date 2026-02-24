@@ -950,6 +950,15 @@ function drawLockGlyph(ctx, x, y, size, progressClosed) {
   ctx.fillRect(x - size * 0.03, bodyY + bodyH * 0.42, size * 0.06, size * 0.15);
 }
 
+function rgbaHex(hex, a = 1) {
+  const n = Number(hex);
+  const r = (n >> 16) & 255;
+  const g = (n >> 8) & 255;
+  const b = n & 255;
+  const alpha = Math.max(0, Math.min(1, a));
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
 function drawScreenHardwareOverlay(ctx, w, h, opts = {}) {
   const accent = opts.accent || '#69f2cf';
   const title = String(opts.title || 'SYS').toUpperCase();
