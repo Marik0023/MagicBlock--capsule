@@ -72,12 +72,6 @@ const state = {
   avatarImgEl: null,
   avatarImgLoaded: false,
   lastScreenFxDraw: 0,
-
-  // message letter prop (flies into capsule during sealing)
-  letterProp: null,
-  letterPropVisual: null,
-  letterPropReady: false,
-  letterPropLoadStarted: false,
 };
 
 // ---------- Three.js scene ----------
@@ -260,325 +254,6 @@ function fitCameraToCapsule() {
   controls.minDistance = dist * 0.45;
   controls.maxDistance = dist * 2.5;
   controls.update();
-}
-
-
-function cubicBezierVec3(out, p0, p1, p2, p3, t) {
-  const x = clamp01(t);
-  const k = 1 - x;
-  const k2 = k * k;
-  const x2 = x * x;
-
-  out.set(0, 0, 0);
-  out.addScaledVector(p0, k2 * k);
-  out.addScaledVector(p1, 3 * k2 * x);
-  out.addScaledVector(p2, 3 * k * x2);
-  out.addScaledVector(p3, x2 * x);
-  return out;
-}
-
-function createFallbackLetterProp() {
-  const g = new THREE.Group();
-  g.name = 'fallback_letter_prop';
-
-  const paper = new THREE.Mesh(
-    new THREE.BoxGeometry(1.0, 0.03, 0.66),
-    new THREE.MeshPhysicalMaterial({
-      color: 0xf2f7ff,
-      roughness: 0.55,
-      metalness: 0.05,
-      clearcoat: 0.15,
-    })
-  );
-
-  const fold = new THREE.Mesh(
-    new THREE.BoxGeometry(0.92, 0.02, 0.28),
-    new THREE.MeshPhysicalMaterial({
-      color: 0xe1ecff,
-      roughness: 0.58,
-      metalness: 0.04,
-      transparent: true,
-      opacity: 0.95,
-    })
-  );
-  fold.position.set(0, 0.017, 0.12);
-
-  const seal = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.08, 0.08, 0.02, 24),
-    new THREE.MeshPhysicalMaterial({
-      color: 0x74e3ff,
-      emissive: new THREE.Color(0x2aa8ff),
-      emissiveIntensity: 0.55,
-      roughness: 0.22,
-      metalness: 0.35,
-      clearcoat: 0.8,
-    })
-  );
-  seal.rotation.x = Math.PI / 2;
-  seal.position.set(0.14, 0.025, 0.05);
-
-  g.add(paper, fold, seal);
-  return g;
-}
-
-function prepareLetterPropVisual(rootObj) {
-  if (!rootObj) return;
-
-  if (state.letterProp) {
-    scene.remove(state.letterProp);
-    state.letterProp = null;
-    state.letterPropVisual = null;
-    state.letterPropReady = false;
-  }
-
-  const wrapper = new THREE.Group();
-  wrapper.name = 'letterPropWrapper';
-  wrapper.visible = false;
-
-  const visual = rootObj;
-  visual.name = visual.name || 'letterPropVisual';
-
-  // Normalize materials / shading
-  visual.traverse?.((obj) => {
-    if (!obj?.isMesh) return;
-    obj.castShadow = false;
-    obj.receiveShadow = false;
-
-    const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
-    mats.forEach((m) => {
-      if (!m) return;
-      if (m.map) m.map.colorSpace = THREE.SRGBColorSpace;
-
-      // Preserve textured look, just polish a bit for readability during flight
-      if ('metalness' in m) m.metalness = Math.min(0.25, Number(m.metalness ?? 0.1));
-      if ('roughness' in m) m.roughness = Math.max(0.28, Number(m.roughness ?? 0.55) * 0.9);
-      if ('envMapIntensity' in m) m.envMapIntensity = 1.0;
-      m.needsUpdate = true;
-    });
-  });
-
-  wrapper.add(visual);
-  scene.add(wrapper);
-
-  // Recenter visual pivot
-  wrapper.updateWorldMatrix(true, true);
-  const rawBox = new THREE.Box3().setFromObject(visual);
-  if (!rawBox.isEmpty() && Number.isFinite(rawBox.min.x)) {
-    const center = rawBox.getCenter(new THREE.Vector3());
-    visual.position.sub(center);
-  }
-
-  // Scale relative to capsule size (works for arbitrary imported GLB scale)
-  wrapper.updateWorldMatrix(true, true);
-  const vBox = new THREE.Box3().setFromObject(visual);
-  const vSize = vBox.getSize(new THREE.Vector3());
-  const maxDim = Math.max(vSize.x, vSize.y, vSize.z, 1e-4);
-
-  const capBox = getCapsuleBounds();
-  const capSize = capBox.getSize(new THREE.Vector3());
-  const desiredMax = Math.max(0.13, Math.min(capSize.x, capSize.z) * 0.34); // reduced more to avoid lid/wall clipping
-
-  const s = desiredMax / maxDim;
-  visual.scale.multiplyScalar(s);
-
-  // Default orientation: keep neutral (safer for custom models)
-  visual.rotation.set(0, 0, 0);
-
-  wrapper.visible = false;
-
-  state.letterProp = wrapper;
-  state.letterPropVisual = visual;
-  state.letterPropReady = true;
-}
-
-function loadLetterPropModel() {
-  if (state.letterPropLoadStarted) return;
-  state.letterPropLoadStarted = true;
-
-  const onLoaded = (gltf) => {
-    try {
-      const rootObj = gltf?.scene || gltf;
-      prepareLetterPropVisual(rootObj);
-      console.info('[letter] letter prop loaded');
-    } catch (e) {
-      console.warn('[letter] prepare failed, using fallback', e);
-      prepareLetterPropVisual(createFallbackLetterProp());
-    }
-  };
-
-  loader.load(
-    './assets/message_letter.glb',
-    onLoaded,
-    undefined,
-    (err) => {
-      console.warn('[letter] GLB not loaded, using fallback envelope', err);
-      prepareLetterPropVisual(createFallbackLetterProp());
-    }
-  );
-}
-
-function getButtonLaunchWorldPoint(baseCenter, baseBox, allSize) {
-  const viewerRect = ui.viewer?.getBoundingClientRect?.();
-  const btnRect = ui.sealBtn?.getBoundingClientRect?.();
-
-  if (!viewerRect || !btnRect || viewerRect.width <= 2 || viewerRect.height <= 2) return null;
-
-  // Button center (slightly biased upward) in viewport coords
-  const px = btnRect.left + btnRect.width * 0.5;
-  const py = btnRect.top + btnRect.height * 0.42;
-
-  // If button is outside viewer area (responsive layout edge-case), fallback
-  if (px < viewerRect.left - 4 || px > viewerRect.right + 4 || py < viewerRect.top - 4 || py > viewerRect.bottom + 4) {
-    return null;
-  }
-
-  const nx = ((px - viewerRect.left) / viewerRect.width) * 2 - 1;
-  const ny = -(((py - viewerRect.top) / viewerRect.height) * 2 - 1);
-
-  const origin = camera.position.clone();
-  const rayPoint = new THREE.Vector3(nx, ny, 0.2).unproject(camera);
-  const rayDir = rayPoint.sub(origin).normalize();
-
-  // Intersect a plane facing the camera, placed between camera and capsule -> looks like launch from UI button
-  const camFwd = new THREE.Vector3();
-  camera.getWorldDirection(camFwd);
-
-  const targetDepth = Math.max(0.7, camera.position.distanceTo(baseCenter) * 0.38);
-  const planePoint = origin.clone().addScaledVector(camFwd, targetDepth);
-  const denom = rayDir.dot(camFwd);
-  if (Math.abs(denom) < 1e-4) return null;
-
-  const t = planePoint.clone().sub(origin).dot(camFwd) / denom;
-  if (!Number.isFinite(t) || t <= 0) return null;
-
-  const p = origin.clone().addScaledVector(rayDir, t);
-
-  // Tiny nudge toward camera to sell the 'pop-out' and avoid immediate overlap with scene geo
-  p.addScaledVector(camFwd, -Math.max(0.02, allSize.y * 0.03));
-  return p;
-}
-
-function getLetterFlightPathPoints() {
-  const allBox = getCapsuleBounds();
-  const allSize = allBox.getSize(new THREE.Vector3());
-  const baseBox = state.capsuleBase
-    ? new THREE.Box3().setFromObject(state.capsuleBase)
-    : allBox.clone();
-
-  const baseCenter = baseBox.getCenter(new THREE.Vector3());
-  const baseSize = baseBox.getSize(new THREE.Vector3());
-
-  const sx = Math.max(baseSize.x, allSize.x, 0.6);
-  const sy = Math.max(baseSize.y, allSize.y, 0.6);
-  const sz = Math.max(baseSize.z, allSize.z, 0.6);
-
-  // Launch from Seal button (projected from UI into world). If unavailable -> fallback to old side start.
-  const fallbackStart = baseCenter.clone().add(new THREE.Vector3(sx * 1.18, sy * 1.02, sz * 0.98));
-  const start = getButtonLaunchWorldPoint(baseCenter, baseBox, allSize) || fallbackStart;
-
-  // Keep first-version feel, but make the route safer around the lid: come in from above and center earlier.
-  const c1 = start.clone().lerp(baseCenter, 0.22).add(new THREE.Vector3(0, sy * 0.34, 0));
-  const c2 = baseCenter.clone().add(new THREE.Vector3(sx * 0.32, sy * 1.34, sz * 0.28));
-
-  const hover = baseCenter.clone().setY(baseBox.max.y + Math.max(0.20, sy * 0.30));
-  const entry = baseCenter.clone().setY(baseBox.max.y + Math.max(0.075, sy * 0.11));
-  const drop = baseCenter.clone().setY(baseBox.max.y - Math.max(0.004, Math.min(0.018, baseSize.y * 0.025)));
-
-  return { start, c1, c2, hover, entry, drop, baseCenter, allSize };
-}
-
-const _letterTmpA = new THREE.Vector3();
-const _letterTmpB = new THREE.Vector3();
-const _letterTmpC = new THREE.Vector3();
-
-function updateLetterSealFlight(globalT) {
-  const prop = state.letterProp;
-  if (!prop || !state.letterPropReady) return;
-
-  // Timeline inside the overall seal animation (slightly longer + smoother than v1)
-  const appearAt = 0.018;
-  const flyEnd = 0.31;
-  const settleEnd = 0.40;
-  const dropEnd = 0.47;
-
-  if (globalT < appearAt || globalT > dropEnd) {
-    prop.visible = false;
-    return;
-  }
-
-  const { start, c1, c2, hover, entry, drop, allSize } = getLetterFlightPathPoints();
-  prop.visible = true;
-
-  let pos = _letterTmpA;
-  let tangent = _letterTmpB.set(0, 0, -1);
-  let scaleMul = 1;
-  let wobble = 1;
-
-  if (globalT <= flyEnd) {
-    const p = clamp01((globalT - appearAt) / Math.max(1e-4, (flyEnd - appearAt)));
-    const pe = easeInOutCubic(p);
-    cubicBezierVec3(pos, start, c1, c2, hover, pe);
-
-    // tangent (numerical)
-    const p2 = Math.min(1, pe + 0.02);
-    cubicBezierVec3(_letterTmpC, start, c1, c2, hover, p2);
-    tangent.copy(_letterTmpC).sub(pos).normalize();
-
-    // Subtle flutter to make the motion feel more alive, but keep it safe.
-    const flutter = (1 - p) * 0.78;
-    pos.x += Math.sin(globalT * Math.PI * 10.2) * Math.max(0.004, allSize.x * 0.0055) * flutter;
-    pos.y += Math.sin(globalT * Math.PI * 8.8 + 0.45) * Math.max(0.003, allSize.y * 0.0042) * flutter;
-    pos.z += Math.cos(globalT * Math.PI * 8.4) * Math.max(0.0025, allSize.z * 0.0042) * flutter;
-
-    scaleMul = 0.84 + p * 0.12;
-    wobble = 1.0 - p * 0.42;
-  } else if (globalT <= settleEnd) {
-    const p = clamp01((globalT - flyEnd) / Math.max(1e-4, (settleEnd - flyEnd)));
-    const e = easeOutCubic(p);
-
-    pos.copy(hover).lerp(entry, e);
-    pos.y += Math.sin(p * Math.PI * 2.6) * Math.max(0.005, allSize.y * 0.007) * (1 - p) * (1 - p);
-    pos.x += Math.sin(p * Math.PI * 1.9 + 0.4) * Math.max(0.003, allSize.x * 0.004) * (1 - p);
-
-    tangent.copy(entry).sub(hover).normalize();
-    scaleMul = 0.96 - p * 0.03;
-    wobble = 0.34 * (1 - p);
-  } else {
-    const p = clamp01((globalT - settleEnd) / Math.max(1e-4, (dropEnd - settleEnd)));
-    const e = easeInOutCubic(p);
-
-    pos.copy(entry).lerp(drop, e);
-    // Keep centered during the drop so it doesn't visibly clip the box walls.
-    pos.x += Math.sin(p * Math.PI * 1.5) * Math.max(0.0018, allSize.x * 0.0018) * (1 - p) * (1 - p);
-    pos.z += Math.cos(p * Math.PI * 1.2) * Math.max(0.0018, allSize.z * 0.0016) * (1 - p) * (1 - p);
-
-    tangent.set(0, -1, 0);
-    scaleMul = 0.93 - p * 0.08;
-    wobble = 0.05 * (1 - p);
-
-    // Hide earlier so the lid never visually intersects the letter during closing.
-    if (p > 0.58) {
-      prop.visible = false;
-      return;
-    }
-  }
-
-  prop.position.copy(pos);
-
-  // Orient roughly along motion, then add a tasteful lively flutter/bank
-  const yaw = Math.atan2(tangent.x, tangent.z);
-  const pitch = -Math.atan2(tangent.y, Math.max(1e-4, Math.hypot(tangent.x, tangent.z)));
-  const flutterPitch = Math.sin(globalT * Math.PI * 7.6 + 0.35) * 0.035 * wobble;
-  const flutterRoll = Math.sin(globalT * Math.PI * 6.2) * 0.06 * wobble;
-
-  prop.rotation.set(
-    pitch + 0.14 + flutterPitch,
-    yaw + Math.PI * 0.5,
-    -0.16 + flutterRoll
-  );
-
-  // Slightly smaller overall during flight to keep it from scraping edges.
-  prop.scale.setScalar(scaleMul * 0.82);
 }
 
 // ---------- Lid auto-solver helpers (main fix) ----------
@@ -980,9 +655,6 @@ loader.load(
 
     // Make capsule look more metallic / futuristic
     enhanceCapsuleAppearance();
-
-    // Optional 3D letter/envelope prop for the seal cinematic
-    loadLetterPropModel();
 
     setupScreenPlaceholders();
     updateDynamicTextures();
@@ -1753,7 +1425,7 @@ ui.downloadBtn.addEventListener('click', () => {
 // ---------- Seal animation ----------
 function animateSealSequence() {
   const start = performance.now();
-  const duration = state.letterPropReady ? 5900 : 3600; // a bit longer for smoother, livelier letter flight
+  const duration = 3600; // довше і плавніше
 
   // Keep final pose the same as before, but add a full 360° spin on top.
   const finalPoseDelta = 0; // stop facing front after full 360 spin
@@ -1765,21 +1437,14 @@ function animateSealSequence() {
 
   function step(now) {
     const t = clamp01((now - start) / duration);
+    const eased = easeInOutCubic(t);
 
-    // 1) Letter appears from the right and drops into the capsule before the lid closes
-    if (state.letterPropReady) {
-      updateLetterSealFlight(t);
-    }
-
-    // 2) Lid closes after the letter has entered
-    const lidStart = state.letterPropReady ? 0.54 : 0.00;
-    const lidEnd = state.letterPropReady ? 0.94 : 0.84;
-    const lidPhase = clamp01((t - lidStart) / Math.max(1e-4, (lidEnd - lidStart)));
+    // Lid closes smoothly through most of the animation, then settles.
+    const lidPhase = clamp01(eased / 0.84);
     state.lidAnimT = 1 - easeInOutCubic(lidPhase);
 
-    // 3) Spin starts slightly after lid motion begins (cinematic feel)
-    const spinStart = state.letterPropReady ? 0.60 : 0.02;
-    const spinPhase = clamp01((t - spinStart) / Math.max(1e-4, (1 - spinStart)));
+    // One-way full spin + final pose offset (no back-and-forth).
+    const spinPhase = clamp01((t - 0.02) / 0.98);
     state.spinAngle = state.sealSpinTargetDelta * easeInOutCubic(spinPhase);
 
     renderDynamicScreens();
@@ -1789,16 +1454,9 @@ function animateSealSequence() {
       return;
     }
 
-    // Finalize state
     state.lidAnimT = 0;
     state.rootBaseRotY += state.sealSpinTargetDelta;
     state.spinAngle = 0;
-
-    if (state.letterProp) {
-      state.letterProp.visible = false;
-      state.letterProp.scale.setScalar(1);
-    }
-
     state.sealed = true;
     state.sealAnimPlaying = false;
 
@@ -1866,3 +1524,165 @@ function tick() {
 
 resize();
 tick();
+
+// =====================================================================
+// LETTER ANIMATION — auto-loops continuously, no button needed
+// =====================================================================
+
+const letterState = {
+  mesh: null,
+  looping: false,
+};
+
+function runLetterLoop() {
+  if (letterState.looping || !letterState.mesh) return;
+  if (state.sealed) return; // stop after capsule is sealed
+  letterState.looping = true;
+
+  // Get capsule bounds fresh each loop (model may shift on first load)
+  const capsuleBox = new THREE.Box3();
+  if (state.capsuleBase) capsuleBox.expandByObject(state.capsuleBase);
+  else if (state.root) capsuleBox.expandByObject(state.root);
+
+  const capsuleCenter = capsuleBox.getCenter(new THREE.Vector3());
+  const capsuleTopY = capsuleBox.max.y;
+
+  // Start: off to the side and slightly in front, below box opening
+  const startPos = new THREE.Vector3(
+    capsuleCenter.x + 1.4,
+    capsuleCenter.y - 0.6,
+    capsuleCenter.z + 2.0
+  );
+
+  // End: just inside the capsule opening
+  const endPos = new THREE.Vector3(
+    capsuleCenter.x,
+    capsuleTopY - 0.05,
+    capsuleCenter.z
+  );
+
+  // Arc peak: high above the capsule
+  const peakPos = new THREE.Vector3(
+    (startPos.x + endPos.x) / 2,
+    capsuleTopY + 1.6,
+    (startPos.z + endPos.z) / 2
+  );
+
+  letterState.mesh.position.copy(startPos);
+  letterState.mesh.rotation.set(0, 0, 0);
+  letterState.mesh.visible = true;
+
+  const flyDuration = 1800;
+  const pauseDuration = 1200; // gap between loops
+  const flyStart = performance.now();
+
+  // Trail setup
+  const trailCount = 35;
+  const trailPositions = new Float32Array(trailCount * 3);
+  const trailGeo = new THREE.BufferGeometry();
+  trailGeo.setAttribute('position', new THREE.BufferAttribute(trailPositions, 3));
+  const trailMat = new THREE.PointsMaterial({
+    color: 0x80dfff,
+    size: 0.055,
+    transparent: true,
+    opacity: 0.75,
+    sizeAttenuation: true,
+  });
+  const trailPoints = new THREE.Points(trailGeo, trailMat);
+  scene.add(trailPoints);
+  const trailHistory = Array.from({ length: trailCount }, () => startPos.clone());
+
+  function flyStep(now) {
+    const raw = clamp01((now - flyStart) / flyDuration);
+    const t = easeInOutCubic(raw);
+    const u = 1 - t;
+
+    // Quadratic Bezier
+    const bx = u * u * startPos.x + 2 * u * t * peakPos.x + t * t * endPos.x;
+    const by = u * u * startPos.y + 2 * u * t * peakPos.y + t * t * endPos.y;
+    const bz = u * u * startPos.z + 2 * u * t * peakPos.z + t * t * endPos.z;
+
+    letterState.mesh.position.set(bx, by, bz);
+
+    // Natural paper-flutter rotation
+    letterState.mesh.rotation.x = t * Math.PI * 1.4;
+    letterState.mesh.rotation.y = t * Math.PI * 2.2;
+    letterState.mesh.rotation.z = Math.sin(t * Math.PI * 3.5) * 0.35;
+
+    // Trail update
+    trailHistory.unshift(new THREE.Vector3(bx, by, bz));
+    trailHistory.length = trailCount;
+    for (let i = 0; i < trailCount; i++) {
+      trailPositions[i * 3]     = trailHistory[i].x;
+      trailPositions[i * 3 + 1] = trailHistory[i].y;
+      trailPositions[i * 3 + 2] = trailHistory[i].z;
+    }
+    trailGeo.attributes.position.needsUpdate = true;
+    trailMat.opacity = 0.75 * (1 - t * 0.55);
+
+    if (raw < 1) {
+      requestAnimationFrame(flyStep);
+      return;
+    }
+
+    // Letter lands — hide it and clean up trail
+    letterState.mesh.visible = false;
+    scene.remove(trailPoints);
+    trailGeo.dispose();
+    trailMat.dispose();
+
+    // Brief camera nudge on impact
+    const shakeStart = performance.now();
+    const shakeDur = 280;
+    const origTarget = controls.target.clone();
+    function shake(sNow) {
+      const st = clamp01((sNow - shakeStart) / shakeDur);
+      const amp = (1 - st) * 0.035;
+      controls.target.set(
+        origTarget.x + (Math.random() - 0.5) * amp,
+        origTarget.y + (Math.random() - 0.5) * amp,
+        origTarget.z + (Math.random() - 0.5) * amp
+      );
+      if (st < 1) { requestAnimationFrame(shake); return; }
+      controls.target.copy(origTarget);
+
+      // Wait, then loop again (unless capsule was sealed while we were flying)
+      setTimeout(() => {
+        letterState.looping = false;
+        if (!state.sealed) runLetterLoop();
+      }, pauseDuration);
+    }
+    requestAnimationFrame(shake);
+  }
+
+  requestAnimationFrame(flyStep);
+}
+
+// Load the letter GLB and kick off the auto-loop immediately
+const letterLoader = new GLTFLoader();
+letterLoader.load(
+  './assets/letter.glb',
+  (gltf) => {
+    letterState.mesh = gltf.scene;
+    letterState.mesh.visible = false;
+    letterState.mesh.scale.setScalar(0.22);
+
+    letterState.mesh.traverse((obj) => {
+      if (!obj.isMesh) return;
+      obj.castShadow = false;
+      obj.receiveShadow = false;
+      if (obj.material) {
+        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+        mats.forEach((m) => { if (m?.map) m.map.colorSpace = THREE.SRGBColorSpace; });
+      }
+    });
+
+    scene.add(letterState.mesh);
+    console.info('[letter] Loaded — starting auto-loop');
+
+    // Small delay to let the capsule model finish positioning
+    setTimeout(runLetterLoop, 800);
+  },
+  undefined,
+  (err) => console.warn('[letter] Could not load letter.glb:', err)
+);
