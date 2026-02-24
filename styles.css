@@ -529,6 +529,108 @@ input[type="file"]::-webkit-file-upload-button{
 }
 
 
+/* ---------- Public Feed ---------- */
+.feed-panel{
+  width: min(1280px, calc(100% - 44px));
+  margin: 18px auto 34px;
+  padding: 18px;
+  border-radius: 22px;
+  background: var(--panel2);
+  border: 1px solid rgba(255,255,255,.10);
+  box-shadow: var(--shadow);
+  position: relative;
+  overflow: hidden;
+}
+.feed-panel:before{
+  content:"";
+  position:absolute; inset:-2px;
+  background: radial-gradient(900px 220px at 10% 0%, rgba(126,246,255,.16), transparent 60%),
+              radial-gradient(900px 220px at 90% 0%, rgba(200,120,255,.12), transparent 60%);
+  pointer-events:none;
+}
+.feed-head{
+  position: relative;
+  display:flex;
+  align-items:baseline;
+  justify-content:space-between;
+  gap:12px;
+  padding: 4px 4px 14px;
+}
+.feed-head h2{
+  margin:0;
+  font-size: 20px;
+  letter-spacing: .2px;
+}
+.feed-sub{
+  font-size: 12px;
+  color: var(--muted);
+}
+.feed-list{
+  position: relative;
+  display:grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.feed-empty{
+  grid-column: 1 / -1;
+  padding: 14px 8px;
+}
+.feed-item{
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+  padding: 12px;
+  border-radius: 18px;
+  background: rgba(10,12,16,.55);
+  border: 1px solid rgba(255,255,255,.10);
+  box-shadow: 0 12px 44px rgba(0,0,0,.45);
+}
+.feed-row{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap: 10px;
+}
+.feed-user{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  min-width: 0;
+}
+.feed-avatar{
+  width: 34px; height: 34px;
+  border-radius: 10px;
+  object-fit: cover;
+  border: 1px solid rgba(255,255,255,.18);
+  background: rgba(255,255,255,.06);
+}
+.feed-nick{
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.feed-date{
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.feed-thumb{
+  width: 100%;
+  aspect-ratio: 16/10;
+  border-radius: 14px;
+  object-fit: cover;
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(255,255,255,.04);
+}
+@media (max-width: 980px){
+  .feed-panel{width: calc(100% - 24px); padding: 14px;}
+  .feed-list{grid-template-columns: 1fr;}
+}
+@media (min-width: 981px) and (max-width: 1220px){
+  .feed-list{grid-template-columns: repeat(2, minmax(0,1fr));}
+}
+
 @media (min-width: 1280px){
   .layout{grid-template-columns:minmax(0,1fr) clamp(500px,34vw,660px);}
 }
