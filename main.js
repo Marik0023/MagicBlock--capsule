@@ -376,7 +376,7 @@ function prepareLetterPropVisual(rootObj) {
 
   const capBox = getCapsuleBounds();
   const capSize = capBox.getSize(new THREE.Vector3());
-  const desiredMax = Math.max(0.18, Math.min(capSize.x, capSize.z) * 0.58);
+  const desiredMax = Math.max(0.16, Math.min(capSize.x, capSize.z) * 0.46); // slightly smaller to avoid scraping box walls
 
   const s = desiredMax / maxDim;
   visual.scale.multiplyScalar(s);
@@ -417,29 +417,6 @@ function loadLetterPropModel() {
   );
 }
 
-function getUiElementWorldPoint(el, depth = null) {
-  const viewerRect = ui.viewer?.getBoundingClientRect?.();
-  const elRect = el?.getBoundingClientRect?.();
-
-  if (!viewerRect) return camera.position.clone();
-
-  const cx = elRect ? (elRect.left + elRect.width * 0.5) : (viewerRect.left + viewerRect.width * 0.5);
-  const cy = elRect ? (elRect.top + elRect.height * 0.5) : (viewerRect.top + viewerRect.height * 0.5);
-
-  const nxRaw = ((cx - viewerRect.left) / Math.max(1, viewerRect.width)) * 2 - 1;
-  const nyRaw = -((((cy - viewerRect.top) / Math.max(1, viewerRect.height)) * 2) - 1);
-
-  // Allow a bit outside the viewport so the letter can originate from a UI button near the edge.
-  const nx = THREE.MathUtils.clamp(nxRaw, -1.75, 1.75);
-  const ny = THREE.MathUtils.clamp(nyRaw, -1.75, 1.75);
-
-  const nearPoint = new THREE.Vector3(nx, ny, -1).unproject(camera);
-  const rayDir = nearPoint.sub(camera.position).normalize();
-
-  const dist = depth ?? Math.max(1.0, camera.position.distanceTo(controls.target) * 0.56);
-  return camera.position.clone().add(rayDir.multiplyScalar(dist));
-}
-
 function getLetterFlightPathPoints() {
   const allBox = getCapsuleBounds();
   const allSize = allBox.getSize(new THREE.Vector3());
@@ -454,51 +431,15 @@ function getLetterFlightPathPoints() {
   const sy = Math.max(baseSize.y, allSize.y, 0.6);
   const sz = Math.max(baseSize.z, allSize.z, 0.6);
 
-  const camToTarget = camera.position.distanceTo(controls.target);
-  const viewDir = new THREE.Vector3();
-  camera.getWorldDirection(viewDir);
-  const camRight = new THREE.Vector3().crossVectors(viewDir, camera.up).normalize();
-  const camUp = new THREE.Vector3().crossVectors(camRight, viewDir).normalize();
+  // Keep the overall feel of the first animation, but approach the opening from a safer/higher path.
+  const start = baseCenter.clone().add(new THREE.Vector3(sx * 1.22, sy * 0.98, sz * 1.02));
+  const c1 = baseCenter.clone().add(new THREE.Vector3(sx * 0.98, sy * 1.24, sz * 0.76));
+  const c2 = baseCenter.clone().add(new THREE.Vector3(sx * 0.30, sy * 1.08, sz * 0.22));
+  const hover = baseCenter.clone().setY(baseBox.max.y + Math.max(0.14, sy * 0.22));
+  const entry = baseCenter.clone().setY(baseBox.max.y + Math.max(0.045, sy * 0.065));
+  const drop = baseCenter.clone().setY(baseBox.max.y - Math.max(0.012, Math.min(0.04, baseSize.y * 0.05)));
 
-  // Start exactly from the Seal button direction (UI -> 3D world handoff)
-  const start = getUiElementWorldPoint(ui.sealBtn, Math.max(0.95, camToTarget * 0.50));
-  const launch = start.clone()
-    .add(camUp.clone().multiplyScalar(Math.max(0.05, sy * 0.06)))
-    .add(viewDir.clone().multiplyScalar(Math.max(0.06, sz * 0.08)));
-
-  const rimY = baseBox.max.y;
-  const openingCenter = baseCenter.clone().setY(rimY);
-
-  // Keep a safe, centered entry path so the envelope doesn't scrape the box walls/textures.
-  const hover = openingCenter.clone().add(new THREE.Vector3(0, Math.max(0.13, sy * 0.22), 0));
-  const align = openingCenter.clone().add(new THREE.Vector3(0, Math.max(0.07, sy * 0.11), 0));
-  const drop = openingCenter.clone().add(new THREE.Vector3(0, Math.max(0.028, sy * 0.045), 0));
-  const sink = openingCenter.clone().add(new THREE.Vector3(0, -Math.max(0.018, Math.min(0.05, baseSize.y * 0.08)), 0));
-
-  const c1 = launch.clone()
-    .add(camRight.clone().multiplyScalar(-Math.max(0.08, sx * 0.20)))
-    .add(camUp.clone().multiplyScalar(Math.max(0.06, sy * 0.14)))
-    .add(viewDir.clone().multiplyScalar(Math.max(0.08, sz * 0.16)));
-
-  const c2 = hover.clone()
-    .add(camRight.clone().multiplyScalar(Math.max(0.04, sx * 0.10)))
-    .add(camUp.clone().multiplyScalar(Math.max(0.05, sy * 0.10)))
-    .add(new THREE.Vector3(0, 0, Math.max(0.04, sz * 0.08)));
-
-  return {
-    start,
-    launch,
-    c1,
-    c2,
-    hover,
-    align,
-    drop,
-    sink,
-    baseCenter,
-    openingCenter,
-    allSize,
-    rimY,
-  };
+  return { start, c1, c2, hover, entry, drop, baseCenter, allSize };
 }
 
 const _letterTmpA = new THREE.Vector3();
@@ -509,91 +450,69 @@ function updateLetterSealFlight(globalT) {
   const prop = state.letterProp;
   if (!prop || !state.letterPropReady) return;
 
-  // Extended cinematic timeline for a smoother, more "alive" flight.
-  const appearAt = 0.005;
-  const launchEnd = 0.13;
-  const arcEnd = 0.40;
-  const settleEnd = 0.54;
-  const dropEnd = 0.69;
-  const sinkEnd = 0.76;
+  // Timeline inside the overall seal animation (slightly longer + smoother than v1)
+  const appearAt = 0.018;
+  const flyEnd = 0.30;
+  const settleEnd = 0.38;
+  const dropEnd = 0.48;
 
-  if (globalT < appearAt || globalT > sinkEnd) {
+  if (globalT < appearAt || globalT > dropEnd) {
     prop.visible = false;
     return;
   }
 
-  const path = getLetterFlightPathPoints();
-  const { start, launch, c1, c2, hover, align, drop, sink, allSize } = path;
+  const { start, c1, c2, hover, entry, drop, allSize } = getLetterFlightPathPoints();
   prop.visible = true;
 
   let pos = _letterTmpA;
   let tangent = _letterTmpB.set(0, 0, -1);
   let scaleMul = 1;
-  let wobbleMul = 1;
+  let wobble = 1;
 
-  if (globalT <= launchEnd) {
-    // Small burst out of the button area (gives a clear "comes from button" feel)
-    const p = clamp01((globalT - appearAt) / Math.max(1e-4, (launchEnd - appearAt)));
-    const e = easeOutBack(p);
-    pos.copy(start).lerp(launch, e);
-    tangent.copy(launch).sub(start).normalize();
-    scaleMul = 0.72 + 0.15 * easeOutQuint(p);
-    wobbleMul = 1.0 - 0.35 * p;
-  } else if (globalT <= arcEnd) {
-    // Main travel arc from button to above the capsule opening
-    const p = clamp01((globalT - launchEnd) / Math.max(1e-4, (arcEnd - launchEnd)));
-    const pe = easeInOutSine(p);
-    cubicBezierVec3(pos, launch, c1, c2, hover, pe);
+  if (globalT <= flyEnd) {
+    const p = clamp01((globalT - appearAt) / Math.max(1e-4, (flyEnd - appearAt)));
+    const pe = easeInOutCubic(p);
+    cubicBezierVec3(pos, start, c1, c2, hover, pe);
 
+    // tangent (numerical)
     const p2 = Math.min(1, pe + 0.02);
-    cubicBezierVec3(_letterTmpC, launch, c1, c2, hover, p2);
+    cubicBezierVec3(_letterTmpC, start, c1, c2, hover, p2);
     tangent.copy(_letterTmpC).sub(pos).normalize();
 
-    const flutter = (1 - p) * 0.45;
-    pos.x += Math.sin(globalT * Math.PI * 12.0) * Math.max(0.006, allSize.x * 0.010) * flutter;
-    pos.y += Math.sin(globalT * Math.PI * 9.0 + 0.7) * Math.max(0.004, allSize.y * 0.006) * flutter;
-    pos.z += Math.cos(globalT * Math.PI * 10.5) * Math.max(0.005, allSize.z * 0.008) * flutter;
+    // Subtle flutter to make the motion feel more alive, but keep it safe.
+    const flutter = (1 - p) * 0.65;
+    pos.x += Math.sin(globalT * Math.PI * 9.5) * Math.max(0.004, allSize.x * 0.006) * flutter;
+    pos.y += Math.sin(globalT * Math.PI * 8.2 + 0.45) * Math.max(0.003, allSize.y * 0.0045) * flutter;
+    pos.z += Math.cos(globalT * Math.PI * 7.8) * Math.max(0.003, allSize.z * 0.005) * flutter;
 
-    scaleMul = 0.86 + 0.10 * p;
-    wobbleMul = 0.75 - 0.25 * p;
+    scaleMul = 0.88 + p * 0.14;
+    wobble = 0.9 - p * 0.4;
   } else if (globalT <= settleEnd) {
-    // Brief settle right above the opening before the drop (more believable / "alive")
-    const p = clamp01((globalT - arcEnd) / Math.max(1e-4, (settleEnd - arcEnd)));
-    const e = easeOutQuint(p);
-    pos.copy(hover).lerp(align, e);
+    const p = clamp01((globalT - flyEnd) / Math.max(1e-4, (settleEnd - flyEnd)));
+    const e = easeOutCubic(p);
 
-    const settleOsc = (1 - p) * (1 - p);
-    pos.y += Math.sin(p * Math.PI * 3.2) * Math.max(0.01, allSize.y * 0.012) * settleOsc;
-    pos.x += Math.sin(p * Math.PI * 2.4 + 0.4) * Math.max(0.006, allSize.x * 0.008) * settleOsc;
+    pos.copy(hover).lerp(entry, e);
+    pos.y += Math.sin(p * Math.PI * 2.6) * Math.max(0.005, allSize.y * 0.007) * (1 - p) * (1 - p);
+    pos.x += Math.sin(p * Math.PI * 1.9 + 0.4) * Math.max(0.003, allSize.x * 0.004) * (1 - p);
 
-    tangent.copy(align).sub(hover).normalize();
-    scaleMul = 0.96 - p * 0.03;
-    wobbleMul = 0.35 * (1 - p);
-  } else if (globalT <= dropEnd) {
-    // Safe centered drop to avoid scraping the box walls/textures
-    const p = clamp01((globalT - settleEnd) / Math.max(1e-4, (dropEnd - settleEnd)));
-    const e = easeInOutSine(p);
-    pos.copy(align).lerp(drop, e);
-
-    // Tiny damped sway only at the start of the drop (keeps it alive but safe)
-    const sway = (1 - p) * (1 - p);
-    pos.x += Math.sin(p * Math.PI * 2.0) * Math.max(0.003, allSize.x * 0.0035) * sway;
-    pos.z += Math.cos(p * Math.PI * 1.7) * Math.max(0.003, allSize.z * 0.0030) * sway;
-
-    tangent.set(0, -1, 0);
-    scaleMul = 0.93 - p * 0.07;
-    wobbleMul = 0.08 * (1 - p);
+    tangent.copy(entry).sub(hover).normalize();
+    scaleMul = 1.01 - p * 0.03;
+    wobble = 0.30 * (1 - p);
   } else {
-    // Final sink straight down the center; hide shortly after entry to avoid visible clipping.
-    const p = clamp01((globalT - dropEnd) / Math.max(1e-4, (sinkEnd - dropEnd)));
+    const p = clamp01((globalT - settleEnd) / Math.max(1e-4, (dropEnd - settleEnd)));
     const e = easeInOutCubic(p);
-    pos.copy(drop).lerp(sink, e);
-    tangent.set(0, -1, 0);
-    scaleMul = 0.86 - p * 0.20;
-    wobbleMul = 0;
 
-    // Disappear a touch before fully inside to avoid texture intersection artifacts.
-    if (p > 0.86) {
+    pos.copy(entry).lerp(drop, e);
+    // Keep centered during the drop so it doesn't visibly clip the box walls.
+    pos.x += Math.sin(p * Math.PI * 1.5) * Math.max(0.0018, allSize.x * 0.0018) * (1 - p) * (1 - p);
+    pos.z += Math.cos(p * Math.PI * 1.2) * Math.max(0.0018, allSize.z * 0.0016) * (1 - p) * (1 - p);
+
+    tangent.set(0, -1, 0);
+    scaleMul = 0.98 - p * 0.10;
+    wobble = 0.06 * (1 - p);
+
+    // Hide a little early to avoid seeing the model intersect inside the box.
+    if (p > 0.80) {
       prop.visible = false;
       return;
     }
@@ -601,23 +520,20 @@ function updateLetterSealFlight(globalT) {
 
   prop.position.copy(pos);
 
-  // Orient along motion + subtle banking/flutter. During drop, keep a slimmer edge-first pose.
+  // Orient roughly along motion, then add a tasteful lively flutter/bank
   const yaw = Math.atan2(tangent.x, tangent.z);
-  const flatLen = Math.max(1e-4, Math.hypot(tangent.x, tangent.z));
-  const pitch = -Math.atan2(tangent.y, flatLen);
-
-  const dropBlend = clamp01((globalT - settleEnd) / Math.max(1e-4, (sinkEnd - settleEnd)));
-  const edgeRoll = THREE.MathUtils.lerp(-0.18, -0.05, dropBlend);
-  const flutterRoll = Math.sin(globalT * Math.PI * 7.0) * 0.05 * wobbleMul;
-  const flutterPitch = Math.sin(globalT * Math.PI * 8.8 + 0.35) * 0.03 * wobbleMul;
+  const pitch = -Math.atan2(tangent.y, Math.max(1e-4, Math.hypot(tangent.x, tangent.z)));
+  const flutterPitch = Math.sin(globalT * Math.PI * 7.0 + 0.35) * 0.03 * wobble;
+  const flutterRoll = Math.sin(globalT * Math.PI * 5.6) * 0.05 * wobble;
 
   prop.rotation.set(
-    pitch + 0.12 + flutterPitch,
+    pitch + 0.14 + flutterPitch,
     yaw + Math.PI * 0.5,
-    edgeRoll + flutterRoll
+    -0.16 + flutterRoll
   );
 
-  prop.scale.setScalar(scaleMul);
+  // Slightly smaller overall during flight to keep it from scraping edges.
+  prop.scale.setScalar(scaleMul * 0.90);
 }
 
 // ---------- Lid auto-solver helpers (main fix) ----------
@@ -1049,23 +965,6 @@ function easeInOutCubic(t) {
 function easeOutCubic(t) {
   const x = clamp01(t);
   return 1 - Math.pow(1 - x, 3);
-}
-
-function easeInOutSine(t) {
-  const x = clamp01(t);
-  return -(Math.cos(Math.PI * x) - 1) / 2;
-}
-
-function easeOutQuint(t) {
-  const x = clamp01(t);
-  return 1 - Math.pow(1 - x, 5);
-}
-
-function easeOutBack(t) {
-  const x = clamp01(t);
-  const c1 = 1.70158;
-  const c3 = c1 + 1;
-  return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2);
 }
 
 function applyTextureOrientation(tex, kind = 'default') {
@@ -1809,7 +1708,7 @@ ui.downloadBtn.addEventListener('click', () => {
 // ---------- Seal animation ----------
 function animateSealSequence() {
   const start = performance.now();
-  const duration = state.letterPropReady ? 7000 : 3800; // smoother, longer cinematic when letter flight is enabled
+  const duration = state.letterPropReady ? 5900 : 3600; // a bit longer for smoother, livelier letter flight
 
   // Keep final pose the same as before, but add a full 360° spin on top.
   const finalPoseDelta = 0; // stop facing front after full 360 spin
@@ -1828,13 +1727,13 @@ function animateSealSequence() {
     }
 
     // 2) Lid closes after the letter has entered
-    const lidStart = state.letterPropReady ? 0.58 : 0.00;
-    const lidEnd = state.letterPropReady ? 0.97 : 0.84;
+    const lidStart = state.letterPropReady ? 0.40 : 0.00;
+    const lidEnd = state.letterPropReady ? 0.93 : 0.84;
     const lidPhase = clamp01((t - lidStart) / Math.max(1e-4, (lidEnd - lidStart)));
     state.lidAnimT = 1 - easeInOutCubic(lidPhase);
 
     // 3) Spin starts slightly after lid motion begins (cinematic feel)
-    const spinStart = state.letterPropReady ? 0.64 : 0.02;
+    const spinStart = state.letterPropReady ? 0.46 : 0.02;
     const spinPhase = clamp01((t - spinStart) / Math.max(1e-4, (1 - spinStart)));
     state.spinAngle = state.sealSpinTargetDelta * easeInOutCubic(spinPhase);
 
