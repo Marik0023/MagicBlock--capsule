@@ -19,6 +19,7 @@ const ui = {
   sealBtn: document.getElementById('sealBtn'),
   downloadBtn: document.getElementById('downloadBtn'),
   sealedOverlay: document.getElementById('sealedOverlay'),
+  overlayOkBtn: document.getElementById('overlayOkBtn'),
   statusNick: document.getElementById('statusNick'),
   statusAvatar: document.getElementById('statusAvatar'),
   statusText: document.getElementById('statusText'),
@@ -81,6 +82,132 @@ const state = {
   letterPropLoadStarted: false,
   letterFlightPathCache: null,
 };
+
+const MIN_MESSAGE_CHARS = 10;
+const CAPSULE_STORAGE_KEY = 'magicblock_time_capsule_state_v1';
+
+function getTrimmedMessageLength(value = state.message) {
+  return String(value || '').trim().length;
+}
+
+function canSealCapsule() {
+  return !!(state.readyProfile && !state.sealed && !state.sealAnimPlaying && getTrimmedMessageLength() >= MIN_MESSAGE_CHARS);
+}
+
+function updateSealButtonState() {
+  if (!ui.sealBtn) return;
+  ui.sealBtn.disabled = !canSealCapsule();
+}
+
+function setSealedOverlayVisible(visible, { showOk = false, blocking = false } = {}) {
+  if (!ui.sealedOverlay) return;
+  ui.sealedOverlay.classList.toggle('hidden', !visible);
+  ui.sealedOverlay.classList.toggle('is-blocking', !!blocking);
+
+  if (ui.overlayOkBtn) {
+    ui.overlayOkBtn.classList.toggle('hidden', !showOk);
+  }
+}
+
+function persistCapsuleState() {
+  try {
+    const payload = {
+      nickname: state.nickname || '',
+      avatarDataUrl: state.avatarDataUrl || '',
+      message: state.message || '',
+      readyProfile: !!state.readyProfile,
+      sealed: !!state.sealed,
+      savedAt: Date.now(),
+    };
+
+    try {
+      localStorage.setItem(CAPSULE_STORAGE_KEY, JSON.stringify(payload));
+    } catch (e) {
+      if ((e && e.name === 'QuotaExceededError') || /quota/i.test(String(e))) {
+        payload.avatarDataUrl = '';
+        localStorage.setItem(CAPSULE_STORAGE_KEY, JSON.stringify(payload));
+      } else {
+        throw e;
+      }
+    }
+  } catch (err) {
+    console.warn('localStorage persist failed', err);
+  }
+}
+
+function loadPersistedCapsuleState() {
+  try {
+    const raw = localStorage.getItem(CAPSULE_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    return {
+      nickname: typeof parsed.nickname === 'string' ? parsed.nickname : '',
+      avatarDataUrl: typeof parsed.avatarDataUrl === 'string' ? parsed.avatarDataUrl : '',
+      message: typeof parsed.message === 'string' ? parsed.message.slice(0, 300) : '',
+      readyProfile: !!parsed.readyProfile,
+      sealed: !!parsed.sealed,
+    };
+  } catch (err) {
+    console.warn('localStorage read failed', err);
+    return null;
+  }
+}
+
+function applyPersistedCapsuleState(saved) {
+  if (!saved) return;
+
+  if (saved.nickname) {
+    state.nickname = saved.nickname;
+    ui.nicknameInput.value = saved.nickname;
+    ui.statusNick.textContent = saved.nickname;
+    ui.profileMiniNick.textContent = saved.nickname;
+  }
+
+  if (saved.avatarDataUrl) {
+    state.avatarDataUrl = saved.avatarDataUrl;
+    prepareAvatarImageForScreens();
+
+    ui.avatarPreview.innerHTML = '';
+    const img = document.createElement('img');
+    img.src = saved.avatarDataUrl;
+    img.alt = 'Avatar preview';
+    ui.avatarPreview.appendChild(img);
+
+    ui.profileMiniAvatar.src = saved.avatarDataUrl;
+    ui.profileMini.classList.remove('hidden');
+    ui.statusAvatar.textContent = 'OK';
+  }
+
+  if (saved.readyProfile || (saved.nickname && saved.avatarDataUrl)) {
+    state.readyProfile = true;
+    ui.introModal.classList.remove('is-open');
+    if (saved.avatarDataUrl) {
+      ui.profileMini.classList.remove('hidden');
+    }
+  }
+
+  if (saved.message) {
+    state.message = saved.message;
+    ui.messageInput.value = saved.message;
+  }
+
+  ui.charCount.textContent = `${state.message.length} / 300`;
+  ui.statusText.textContent = `${state.message.length} / 300`;
+
+  if (saved.sealed) {
+    state.sealed = true;
+    state.sealAnimPlaying = false;
+    ui.messageInput.disabled = true;
+    ui.downloadBtn.classList.remove('hidden');
+    ui.statusSeal.textContent = 'Sealed';
+    setSealedOverlayVisible(true, { showOk: true, blocking: true });
+    state.lidAnimT = 0;
+  }
+
+  updateSealButtonState();
+  updateDynamicTextures();
+}
 
 // ---------- Three.js scene ----------
 const scene = new THREE.Scene();
@@ -1058,7 +1185,7 @@ loader.load(
     setupScreenPlaceholders();
     updateDynamicTextures();
 
-    ui.sealBtn.disabled = !state.readyProfile;
+    updateSealButtonState();
     resize();
   },
   undefined,
@@ -1946,7 +2073,8 @@ function updateDynamicTextures() {
 function validateIntroForm() {
   const nick = ui.nicknameInput.value.trim();
   const file = ui.avatarInput.files?.[0];
-  ui.startBtn.disabled = !(nick.length > 0 && !!file);
+  const hasAvatar = !!file || !!state.avatarDataUrl;
+  ui.startBtn.disabled = !(nick.length > 0 && hasAvatar);
 }
 
 function updateAvatarFileNameLabel() {
@@ -2011,6 +2139,8 @@ ui.avatarInput.addEventListener('change', async () => {
     ui.avatarPreview.appendChild(img);
 
     ui.statusAvatar.textContent = 'OK';
+    persistCapsuleState();
+    validateIntroForm();
   } catch (err) {
     console.error('Avatar read error', err);
     alert('Failed to read the avatar file');
@@ -2051,6 +2181,7 @@ ui.introForm.addEventListener('submit', async (e) => {
       ui.avatarPreview.appendChild(img);
 
       ui.statusAvatar.textContent = 'OK';
+      persistCapsuleState();
     } catch (err) {
       console.error('Avatar fallback read error', err);
       alert('Failed to read the avatar file. Try another PNG / JPG / WEBP file');
@@ -2066,11 +2197,12 @@ ui.introForm.addEventListener('submit', async (e) => {
   ui.profileMini.classList.remove('hidden');
 
   ui.introModal.classList.remove('is-open');
-  ui.sealBtn.disabled = false;
 
   ui.statusNick.textContent = nick;
   ui.statusAvatar.textContent = 'OK';
 
+  persistCapsuleState();
+  updateSealButtonState();
   updateDynamicTextures();
 });
 
@@ -2078,15 +2210,28 @@ ui.messageInput.addEventListener('input', () => {
   state.message = ui.messageInput.value;
   ui.charCount.textContent = `${state.message.length} / 300`;
   ui.statusText.textContent = `${state.message.length} / 300`;
+  persistCapsuleState();
+  updateSealButtonState();
 });
 
 updateAvatarFileNameLabel();
+applyPersistedCapsuleState(loadPersistedCapsuleState());
+validateIntroForm();
+updateSealButtonState();
 
 ui.sealBtn.addEventListener('click', () => {
   if (!state.readyProfile || state.sealed || state.sealAnimPlaying) return;
 
+  if (getTrimmedMessageLength() < MIN_MESSAGE_CHARS) {
+    alert(`Message must be at least ${MIN_MESSAGE_CHARS} characters`);
+    ui.messageInput.focus();
+    updateSealButtonState();
+    return;
+  }
+
+  setSealedOverlayVisible(false);
   state.sealAnimPlaying = true;
-  ui.sealBtn.disabled = true;
+  updateSealButtonState();
   ui.statusSeal.textContent = 'Sealing...';
 
   animateSealSequence();
@@ -2097,6 +2242,10 @@ ui.downloadBtn.addEventListener('click', () => {
   a.href = renderer.domElement.toDataURL('image/png');
   a.download = `time-capsule-${slugify(state.nickname || 'user')}.png`;
   a.click();
+});
+
+ui.overlayOkBtn?.addEventListener('click', () => {
+  setSealedOverlayVisible(false);
 });
 
 // ---------- Seal animation ----------
@@ -2156,10 +2305,12 @@ function animateSealSequence() {
 
     controls.enabled = true;
     ui.statusSeal.textContent = 'Sealed';
-    ui.sealedOverlay.classList.remove('hidden');
+    setSealedOverlayVisible(true, { showOk: true, blocking: true });
     ui.downloadBtn.classList.remove('hidden');
     ui.messageInput.disabled = true;
 
+    persistCapsuleState();
+    updateSealButtonState();
     updateDynamicTextures();
   }
 
