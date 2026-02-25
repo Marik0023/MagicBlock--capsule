@@ -1813,8 +1813,8 @@ function drawAvatarScreenCanvas(ctx, w, h, time) {
 
   const img = state.avatarImgEl;
   if (img && state.avatarImgLoaded) {
-    // Use cover (Math.max) so image always fills the full screen with no white gaps
-    const scale = Math.max(innerW / img.width, innerH / img.height);
+    // contain: fit full image within canvas, no cropping
+    const scale = Math.min(innerW / img.width, innerH / img.height);
     const dw = img.width * scale;
     const dh = img.height * scale;
     const dx = innerX + (innerW - dw) / 2;
@@ -1874,7 +1874,7 @@ function renderDynamicScreens(force = false) {
   }
 
   if (state.screens.avatar?.isMesh) {
-    const pack = ensureScreenFxPack('avatar', 768, 768);
+    const pack = ensureScreenFxPack('avatar', 1024, 640);
     drawAvatarScreenCanvas(pack.ctx, pack.width, pack.height, now);
     pack.tex.needsUpdate = true;
     if (!(state.screens.avatar.material && state.screens.avatar.material.map === pack.tex)) {
