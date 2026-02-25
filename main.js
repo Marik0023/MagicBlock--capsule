@@ -1260,13 +1260,29 @@ function easeOutCubic(t) {
 
 function applyTextureOrientation(tex, kind = 'default') {
   if (!tex) return tex;
+
+  // IMPORTANT: canvases applied to GLTF meshes must use flipY=false (same as glTF textures),
+  // otherwise text/icons appear upside-down on screen_* meshes.
   tex.flipY = false;
+
   tex.center.set(0.5, 0.5);
-  tex.rotation = 0;
+  tex.rotation = -Math.PI / 2; // GLB screens in this model are UV-rotated 90deg
   tex.wrapS = THREE.ClampToEdgeWrapping;
   tex.wrapT = THREE.ClampToEdgeWrapping;
   tex.repeat.set(1, 1);
   tex.offset.set(0, 0);
+
+  // Lid screen UV in this GLB is mirrored relative to side screens.
+  // IMPORTANT: negative repeat requires RepeatWrapping (with Clamp it can sample edge color -> blank screen on some GPUs).
+  if (kind === 'lid') {
+    // Lid screen UV is opposite to the side screens in this GLB.
+    // Use +90deg (instead of the shared -90deg) + Y mirror to keep the lid display upright.
+    tex.rotation = Math.PI / 2;
+    tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.y = -1;
+    tex.offset.y = 1;
+  }
+
   tex.needsUpdate = true;
   return tex;
 }
@@ -1603,27 +1619,46 @@ function drawLockGlyph(ctx, x, y, size, progressClosed) {
 }
 
 function drawLidScreenCanvas(ctx, w, h, time) {
-  ctx.fillStyle = 'rgb(7, 11, 17)';
-  ctx.fillRect(0, 0, w, h);
-
-  // With flipY=false and no texture rotation, lid UV is mirrored horizontally.
-  // Pre-flip canvas horizontally to compensate.
+  // LID SCREEN FIX: current lid UVs display text mirrored horizontally,
+  // so we pre-flip the canvas once here to make the final screen readable.
   ctx.save();
   ctx.translate(w, 0);
   ctx.scale(-1, 1);
 
+  drawScreenGlassBg(ctx, w, h, {
+    radius: 44,
+    border: 4,
+    glow: 0.26,
+    accentA: 'rgba(111,228,255,0.48)',
+    accentB: 'rgba(123,134,255,0.28)',
+    inner: 'rgba(7,11,17,0.92)',
+  });
+  drawTabletBezelChrome(ctx, w, h, time, {
+    radius: 44,
+    outerPad: 2,
+    innerPad: 12,
+    leftButtons: 4,
+    rightButtons: 3,
+    topTabs: true,
+    bottomDock: true,
+  });
+
+  // Small device header chips / indicators (cosmic tablet feel)
+  drawUiPill(ctx, w * 0.08, h * 0.10, w * 0.14, 28, 'SYS', { active: true, align: 'center' });
+  drawUiPill(ctx, w * 0.24, h * 0.10, w * 0.16, 28, 'LOCK', { active: state.sealed || state.sealAnimPlaying });
+  drawUiPill(ctx, w * 0.78, h * 0.10, w * 0.10, 28, 'TX', { active: true });
+
   const closeP = 1 - clamp01(state.lidAnimT);
   const sealP = state.sealAnimPlaying ? closeP : (state.sealed ? 1 : 0);
+  const x = w * 0.22;
+  const y = h * 0.5;
+  drawLockGlyph(ctx, x, y, h * 0.55, sealP);
 
-  // Lock glyph left side
-  drawLockGlyph(ctx, w * 0.18, h * 0.5, h * 0.72, sealP);
-
-  // Status text right of lock
   const status = state.sealed ? 'SEALED' : (state.sealAnimPlaying ? 'LOCKING…' : 'UNLOCKED');
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
 
-  const titleGrad = ctx.createLinearGradient(w * 0.32, 0, w * 0.95, 0);
+  const titleGrad = ctx.createLinearGradient(w * 0.36, 0, w * 0.92, 0);
   if (state.sealed) {
     titleGrad.addColorStop(0, '#d7f2ff');
     titleGrad.addColorStop(1, '#8ad5ff');
@@ -1632,17 +1667,16 @@ function drawLidScreenCanvas(ctx, w, h, time) {
     titleGrad.addColorStop(1, '#83ffd0');
   }
   ctx.fillStyle = titleGrad;
-  ctx.font = '800 72px Inter, sans-serif';
-  ctx.fillText(status, w * 0.34, h * 0.38);
+  ctx.font = '800 60px Inter, sans-serif';
+  ctx.fillText(status, w * 0.36, h * 0.42);
 
-  ctx.font = '500 28px Inter, sans-serif';
+  ctx.font = '600 24px Inter, sans-serif';
   ctx.fillStyle = 'rgba(211,233,255,0.72)';
-  ctx.fillText('TGE CAPSULE SECURITY', w * 0.34, h * 0.60);
+  ctx.fillText('TGE CAPSULE SECURITY', w * 0.36, h * 0.62);
 
-  // Progress bar
-  const barX = w * 0.34, barY = h * 0.74, barW = w * 0.58, barH = 24;
+  const barX = w * 0.36, barY = h * 0.73, barW = w * 0.5, barH = 26;
   ctx.fillStyle = 'rgba(255,255,255,0.06)';
-  roundRect(ctx, barX, barY, barW, barH, 12);
+  roundRect(ctx, barX, barY, barW, barH, 13);
   ctx.fill();
 
   const fillP = state.sealed ? 1 : (state.sealAnimPlaying ? easeOutCubic(closeP) : 0.18 + Math.sin(time * 2.3) * 0.03);
@@ -1650,12 +1684,12 @@ function drawLidScreenCanvas(ctx, w, h, time) {
   fillGrad.addColorStop(0, state.sealed ? 'rgba(120,214,255,0.95)' : 'rgba(111,255,203,0.95)');
   fillGrad.addColorStop(1, 'rgba(125,136,255,0.9)');
   ctx.fillStyle = fillGrad;
-  roundRect(ctx, barX + 2, barY + 2, Math.max(8, (barW - 4) * clamp01(fillP)), barH - 4, 10);
+  roundRect(ctx, barX + 2, barY + 2, Math.max(10, (barW - 4) * clamp01(fillP)), barH - 4, 11);
   ctx.fill();
 
   const sweepX = ((time * 180) % (barW + 120)) - 60;
   ctx.save();
-  roundRect(ctx, barX + 2, barY + 2, barW - 4, barH - 4, 10);
+  roundRect(ctx, barX + 2, barY + 2, barW - 4, barH - 4, 11);
   ctx.clip();
   const sweep = ctx.createLinearGradient(barX + sweepX - 40, barY, barX + sweepX + 40, barY);
   sweep.addColorStop(0, 'rgba(255,255,255,0)');
@@ -1665,22 +1699,52 @@ function drawLidScreenCanvas(ctx, w, h, time) {
   ctx.fillRect(barX, barY, barW, barH);
   ctx.restore();
 
+  // restore pre-flip wrapper
+  // Tiny footer control buttons
+  const btnBaseY = h * 0.82;
+  drawUiPill(ctx, w * 0.10, btnBaseY, w * 0.11, 24, 'A1', { active: true, font: '700 11px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.22, btnBaseY, w * 0.11, 24, 'A2', { font: '700 11px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.84, btnBaseY, w * 0.10, 24, 'OK', { active: state.sealed, font: '700 11px Inter, sans-serif' });
+
   ctx.restore();
 }
 
 function drawNameScreenCanvas(ctx, w, h, time) {
   const nick = (state.nickname || 'PLAYER').slice(0, 24);
 
-  ctx.fillStyle = 'rgb(10, 14, 22)';
-  ctx.fillRect(0, 0, w, h);
+  drawScreenGlassBg(ctx, w, h, {
+    radius: 36,
+    border: 3,
+    glow: 0.16,
+    accentA: 'rgba(130,220,255,0.3)',
+    accentB: 'rgba(123,134,255,0.2)',
+    inner: 'rgba(10,14,22,0.92)',
+  });
+  drawTabletBezelChrome(ctx, w, h, time, {
+    radius: 36,
+    outerPad: 2,
+    innerPad: 12,
+    leftButtons: 3,
+    rightButtons: 4,
+    topTabs: true,
+    bottomDock: true,
+  });
 
-  // Name/side screens are mirrored horizontally with flipY=false + no rotation.
-  // Pre-flip to compensate.
+  // Header system pills / signal bars
+  drawUiPill(ctx, 26, 18, 118, 22, 'IDENT', { active: true, align: 'left' });
+  drawUiPill(ctx, 150, 18, 110, 22, 'SECURE', { active: true, align: 'left' });
+  const sigX = w - 170, sigY = 20;
+  for (let i = 0; i < 5; i++) {
+    const bh = 4 + i * 3;
+    ctx.fillStyle = `rgba(111,228,255,${(0.18 + 0.14 * i + 0.08 * Math.sin(time * 3 + i)).toFixed(3)})`;
+    roundRect(ctx, sigX + i * 12, sigY + (18 - bh), 8, bh, 3);
+    ctx.fill();
+  }
+
   ctx.save();
-  ctx.translate(w, 0);
-  ctx.scale(-1, 1);
+  roundRect(ctx, 8, 8, w - 16, h - 16, 32);
+  ctx.clip();
 
-  // Subtle scan lines
   for (let i = 0; i < 9; i++) {
     const yy = ((time * 42 + i * 40) % (h + 80)) - 40;
     const g = ctx.createLinearGradient(0, yy, 0, yy + 24);
@@ -1691,17 +1755,21 @@ function drawNameScreenCanvas(ctx, w, h, time) {
     ctx.fillRect(0, yy, w, 24);
   }
 
+  const sweepX = ((time * 240) % (w + 240)) - 120;
+  const sweep = ctx.createLinearGradient(sweepX - 100, 0, sweepX + 100, 0);
+  sweep.addColorStop(0, 'rgba(255,255,255,0)');
+  sweep.addColorStop(0.5, 'rgba(170,235,255,0.18)');
+  sweep.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = sweep;
+  ctx.fillRect(0, 0, w, h);
+  ctx.restore();
+
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
-  ctx.font = '500 26px Inter, sans-serif';
-  ctx.fillStyle = 'rgba(197,221,255,0.56)';
-  ctx.fillText('IDENTITY LINKED', w / 2, h * 0.28);
-
-  let size = 110;
-  if (nick.length > 10) size = 86;
-  if (nick.length > 14) size = 68;
-  if (nick.length > 18) size = 52;
+  let size = 92;
+  if (nick.length > 14) size = 72;
+  if (nick.length > 18) size = 58;
 
   const pulse = 0.92 + Math.sin(time * 3.8) * 0.04;
   const nameGrad = ctx.createLinearGradient(0, 0, w, 0);
@@ -1713,49 +1781,117 @@ function drawNameScreenCanvas(ctx, w, h, time) {
   ctx.shadowBlur = 18;
   ctx.fillStyle = nameGrad;
   ctx.font = `800 ${Math.round(size * pulse)}px Inter, sans-serif`;
-  ctx.fillText(nick, w / 2, h * 0.55);
-  ctx.shadowBlur = 0;
+  ctx.fillText(nick, w / 2, h * 0.54);
 
-  ctx.restore();
+  ctx.shadowBlur = 0;
+  ctx.font = '600 18px Inter, sans-serif';
+  ctx.fillStyle = 'rgba(197,221,255,0.56)';
+  ctx.fillText('IDENTITY LINKED', w / 2, h * 0.2);
+
+  // Bottom functional buttons / labels
+  drawUiPill(ctx, w * 0.12, h * 0.78, w * 0.12, 24, 'SCAN', { active: true, font: '700 11px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.26, h * 0.78, w * 0.12, 24, 'SYNC', { font: '700 11px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.62, h * 0.78, w * 0.12, 24, 'NODE', { font: '700 11px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.76, h * 0.78, w * 0.12, 24, 'OK', { active: true, font: '700 11px Inter, sans-serif' });
 }
 
 function drawAvatarScreenCanvas(ctx, w, h, time) {
-  ctx.fillStyle = 'rgb(8, 10, 18)';
-  ctx.fillRect(0, 0, w, h);
+  drawScreenGlassBg(ctx, w, h, {
+    radius: 56,
+    border: 3,
+    glow: 0.2,
+    accentA: 'rgba(111,228,255,0.26)',
+    accentB: 'rgba(123,134,255,0.18)',
+    inner: 'rgba(10,14,22,0.94)',
+  });
+  drawTabletBezelChrome(ctx, w, h, time, {
+    radius: 56,
+    outerPad: 2,
+    innerPad: 14,
+    leftButtons: 5,
+    rightButtons: 5,
+    topTabs: true,
+    bottomDock: true,
+  });
 
-  // Side screens are mirrored horizontally with flipY=false + no rotation.
-  // Pre-flip to compensate.
+  // Top bar controls / mini buttons
+  drawUiPill(ctx, w * 0.08, h * 0.05, w * 0.18, 24, 'VISOR', { active: true, align: 'left', font: '700 11px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.28, h * 0.05, w * 0.14, 24, 'CAM', { font: '700 11px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.72, h * 0.05, w * 0.08, 24, 'A', { active: true, font: '700 11px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.82, h * 0.05, w * 0.10, 24, 'REC', { active: !!state.avatarImgLoaded, font: '700 11px Inter, sans-serif' });
+
+  const pad = 48;
+  const innerX = pad;
+  const innerY = pad;
+  const innerW = w - pad * 2;
+  const innerH = h - pad * 2;
+
+  const borderPulse = 0.65 + Math.sin(time * 4.5) * 0.18;
+  ctx.strokeStyle = `rgba(140,220,255,${(0.16 + borderPulse * 0.28).toFixed(3)})`;
+  ctx.lineWidth = 4;
+  roundRect(ctx, innerX, innerY, innerW, innerH, 44);
+  ctx.stroke();
+
+  roundRect(ctx, innerX, innerY, innerW, innerH, 44);
   ctx.save();
-  ctx.translate(w, 0);
-  ctx.scale(-1, 1);
+  ctx.clip();
 
   const img = state.avatarImgEl;
   if (img && state.avatarImgLoaded) {
-    // cover: fill entire canvas, crop edges if needed
-    const scale = Math.max(w / img.width, h / img.height);
+    const floatX = Math.sin(time * 1.6) * 7;
+    const floatY = Math.cos(time * 1.9) * 6;
+    const scale = Math.max(innerW / img.width, innerH / img.height) * (1.03 + Math.sin(time * 1.4) * 0.01);
     const dw = img.width * scale;
     const dh = img.height * scale;
-    const dx = (w - dw) / 2;
-    const dy = (h - dh) / 2;
+    const dx = innerX + (innerW - dw) / 2 + floatX;
+    const dy = innerY + (innerH - dh) / 2 + floatY;
     ctx.drawImage(img, dx, dy, dw, dh);
   } else {
+    const ph = ctx.createLinearGradient(innerX, innerY, innerX + innerW, innerY + innerH);
+    ph.addColorStop(0, 'rgba(28,38,56,0.95)');
+    ph.addColorStop(1, 'rgba(14,20,30,0.95)');
+    ctx.fillStyle = ph;
+    ctx.fillRect(innerX, innerY, innerW, innerH);
+
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.font = '700 36px Inter, sans-serif';
-    ctx.fillStyle = 'rgba(200,220,255,0.5)';
+    ctx.font = '700 30px Inter, sans-serif';
+    ctx.fillStyle = 'rgba(200,220,255,0.7)';
     ctx.fillText('AVATAR', w / 2, h / 2);
   }
 
-  // Subtle scan sweep
-  const sweepY = ((time * 180) % (h + 160)) - 80;
-  const sg = ctx.createLinearGradient(0, sweepY - 40, 0, sweepY + 40);
+  const sweepY = ((time * 180) % (innerH + 160)) - 80;
+  const sg = ctx.createLinearGradient(0, innerY + sweepY - 40, 0, innerY + sweepY + 40);
   sg.addColorStop(0, 'rgba(255,255,255,0)');
-  sg.addColorStop(0.5, 'rgba(170,232,255,0.12)');
+  sg.addColorStop(0.5, 'rgba(170,232,255,0.16)');
   sg.addColorStop(1, 'rgba(255,255,255,0)');
   ctx.fillStyle = sg;
-  ctx.fillRect(0, 0, w, h);
-
+  ctx.fillRect(innerX, innerY, innerW, innerH);
   ctx.restore();
+
+  ctx.strokeStyle = 'rgba(165,236,255,0.55)';
+  ctx.lineWidth = 5;
+  const c = 26;
+  const corners = [
+    [innerX + 10, innerY + 10, 1, 1],
+    [innerX + innerW - 10, innerY + 10, -1, 1],
+    [innerX + 10, innerY + innerH - 10, 1, -1],
+    [innerX + innerW - 10, innerY + innerH - 10, -1, -1],
+  ];
+  for (const [cx, cy, sx, sy] of corners) {
+    ctx.beginPath();
+    ctx.moveTo(cx, cy + sy * c);
+    ctx.lineTo(cx, cy);
+    ctx.lineTo(cx + sx * c, cy);
+    ctx.stroke();
+  }
+
+  // Bottom docking controls / status buttons (tablet hardware style)
+  const dockY = h - 42;
+  drawUiPill(ctx, w * 0.10, dockY, w * 0.16, 22, 'GRID', { font: '700 10px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.28, dockY, w * 0.16, 22, 'ZOOM', { active: true, font: '700 10px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.56, dockY, w * 0.14, 22, 'HDR', { font: '700 10px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.72, dockY, w * 0.18, 22, 'SYNC OK', { active: state.avatarImgLoaded, font: '700 10px Inter, sans-serif' });
 }
 
 function renderDynamicScreens(force = false) {
@@ -1787,7 +1923,7 @@ function renderDynamicScreens(force = false) {
   }
 
   if (state.screens.avatar?.isMesh) {
-    const pack = ensureScreenFxPack('avatar', 1024, 512);
+    const pack = ensureScreenFxPack('avatar', 768, 768);
     drawAvatarScreenCanvas(pack.ctx, pack.width, pack.height, now);
     pack.tex.needsUpdate = true;
     if (!(state.screens.avatar.material && state.screens.avatar.material.map === pack.tex)) {
@@ -2023,6 +2159,260 @@ function dataUrlToBlob(dataUrl) {
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   return new Blob([bytes], { type: mime });
+}
+
+
+function hashStringToSeed(input = '') {
+  const str = String(input || 'magicblock');
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+function seededRand(seed) {
+  let t = seed >>> 0;
+  return () => {
+    t += 0x6D2B79F5;
+    let r = Math.imul(t ^ (t >>> 15), 1 | t);
+    r ^= r + Math.imul(r ^ (r >>> 7), 61 | r);
+    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function loadImageFromDataUrl(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Failed to load export image'));
+    img.src = dataUrl;
+  });
+}
+
+function drawImageCover(ctx, img, x, y, w, h) {
+  const iw = Math.max(1, img.naturalWidth || img.width || 1);
+  const ih = Math.max(1, img.naturalHeight || img.height || 1);
+  const scale = Math.max(w / iw, h / ih);
+  const dw = iw * scale;
+  const dh = ih * scale;
+  const dx = x + (w - dw) / 2;
+  const dy = y + (h - dh) / 2;
+  ctx.drawImage(img, dx, dy, dw, dh);
+}
+
+function drawSpaceBackground(ctx, width, height, seedText = '') {
+  const rand = seededRand(hashStringToSeed(seedText));
+
+  const bg = ctx.createLinearGradient(0, 0, 0, height);
+  bg.addColorStop(0, '#02050f');
+  bg.addColorStop(0.45, '#060b1d');
+  bg.addColorStop(1, '#03060d');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, width, height);
+
+  // Nebula glows
+  for (let i = 0; i < 9; i++) {
+    const x = rand() * width;
+    const y = rand() * height * 0.8;
+    const r = (0.12 + rand() * 0.2) * Math.min(width, height);
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    const hue = [205, 220, 245, 265][Math.floor(rand() * 4)];
+    const alpha = 0.08 + rand() * 0.1;
+    g.addColorStop(0, `hsla(${hue}, 95%, 70%, ${alpha})`);
+    g.addColorStop(0.45, `hsla(${hue}, 90%, 50%, ${alpha * 0.45})`);
+    g.addColorStop(1, `hsla(${hue}, 90%, 20%, 0)`);
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Dense stars
+  for (let i = 0; i < 260; i++) {
+    const x = rand() * width;
+    const y = rand() * height;
+    const size = rand() < 0.92 ? rand() * 1.8 + 0.25 : rand() * 3 + 1.2;
+    const a = 0.35 + rand() * 0.65;
+    ctx.fillStyle = `rgba(255,255,255,${a})`;
+    ctx.beginPath();
+    ctx.arc(x, y, size * 0.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    if (size > 2.0) {
+      ctx.strokeStyle = `rgba(170,210,255,${a * 0.45})`;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(x - size * 1.4, y);
+      ctx.lineTo(x + size * 1.4, y);
+      ctx.moveTo(x, y - size * 1.4);
+      ctx.lineTo(x, y + size * 1.4);
+      ctx.stroke();
+    }
+  }
+
+  // Planet/arc glow (bottom-left like a horizon)
+  const px = width * 0.22;
+  const py = height * 1.03;
+  const pr = Math.min(width, height) * 0.34;
+  const planetGlow = ctx.createRadialGradient(px, py - pr * 0.55, 0, px, py - pr * 0.55, pr * 1.25);
+  planetGlow.addColorStop(0, 'rgba(94,162,255,0.28)');
+  planetGlow.addColorStop(0.35, 'rgba(70,110,230,0.18)');
+  planetGlow.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = planetGlow;
+  ctx.fillRect(0, 0, width, height);
+
+  ctx.fillStyle = '#050913';
+  ctx.beginPath();
+  ctx.arc(px, py, pr, Math.PI, Math.PI * 2);
+  ctx.closePath();
+  ctx.fill();
+
+  // subtle vignette
+  const vig = ctx.createRadialGradient(width / 2, height / 2, Math.min(width, height) * 0.25, width / 2, height / 2, Math.max(width, height) * 0.75);
+  vig.addColorStop(0, 'rgba(0,0,0,0)');
+  vig.addColorStop(1, 'rgba(0,0,0,0.34)');
+  ctx.fillStyle = vig;
+  ctx.fillRect(0, 0, width, height);
+}
+
+function drawPaperNoise(ctx, x, y, w, h, seedText = '') {
+  const rand = seededRand(hashStringToSeed(`paper:${seedText}`));
+  ctx.save();
+  ctx.globalAlpha = 0.055;
+  for (let i = 0; i < 1700; i++) {
+    const px = x + rand() * w;
+    const py = y + rand() * h;
+    const s = rand() * 1.1 + 0.25;
+    const shade = 180 + Math.floor(rand() * 55);
+    ctx.fillStyle = `rgb(${shade},${shade},${shade})`;
+    ctx.fillRect(px, py, s, s);
+  }
+  ctx.restore();
+}
+
+function captureCapsuleTransparentDataUrl() {
+  const prevBg = scene.background;
+  const prevFloorVisible = typeof floor !== 'undefined' && floor ? floor.visible : true;
+
+  try {
+    scene.background = null;
+    if (typeof floor !== 'undefined' && floor) floor.visible = false;
+    renderDynamicScreens?.(true);
+    renderer.render(scene, camera);
+    return renderer.domElement.toDataURL('image/png');
+  } finally {
+    scene.background = prevBg;
+    if (typeof floor !== 'undefined' && floor) floor.visible = prevFloorVisible;
+    renderer.render(scene, camera);
+  }
+}
+
+async function buildPolaroidCapsuleImageDataUrl() {
+  const capsuleDataUrl = captureCapsuleTransparentDataUrl() || state._sealedPngDataUrl || renderer.domElement.toDataURL('image/png');
+  const capsuleImg = await loadImageFromDataUrl(capsuleDataUrl);
+
+  const W = 1600;
+  const H = 1200;
+  const canvas = document.createElement('canvas');
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('2D canvas export not available');
+
+  drawSpaceBackground(ctx, W, H, state.nickname || 'magicblock');
+
+  ctx.save();
+  // Place a tilted Polaroid in the center
+  const rot = -0.055;
+  ctx.translate(W * 0.53, H * 0.5);
+  ctx.rotate(rot);
+
+  const polW = 760;
+  const polH = 920;
+  const x = -polW / 2;
+  const y = -polH / 2;
+
+  ctx.shadowColor = 'rgba(0,0,0,0.45)';
+  ctx.shadowBlur = 30;
+  ctx.shadowOffsetY = 16;
+  ctx.shadowOffsetX = -4;
+  ctx.fillStyle = '#f7f4ee';
+  ctx.fillRect(x, y, polW, polH);
+
+  ctx.shadowColor = 'transparent';
+  drawPaperNoise(ctx, x, y, polW, polH, state.nickname || 'user');
+
+  // Inner photo window (square-ish)
+  const padX = 56;
+  const padTop = 54;
+  const padBottom = 206;
+  const innerX = x + padX;
+  const innerY = y + padTop;
+  const innerW = polW - padX * 2;
+  const innerH = polH - padTop - padBottom;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(innerX, innerY, innerW, innerH);
+  ctx.clip();
+
+  // Add extra cosmic depth inside photo window too
+  drawSpaceBackground(ctx, W, H, `${state.nickname || 'user'}-inner`);
+
+  // dark vignette plate for subject grounding
+  const plate = ctx.createRadialGradient(innerX + innerW * 0.5, innerY + innerH * 0.75, 10, innerX + innerW * 0.5, innerY + innerH * 0.76, innerW * 0.55);
+  plate.addColorStop(0, 'rgba(7,14,28,0.9)');
+  plate.addColorStop(0.65, 'rgba(6,10,20,0.55)');
+  plate.addColorStop(1, 'rgba(6,10,20,0)');
+  ctx.fillStyle = plate;
+  ctx.fillRect(innerX, innerY, innerW, innerH);
+
+  // draw capsule render over the cosmic inner background
+  drawImageCover(ctx, capsuleImg, innerX, innerY, innerW, innerH);
+
+  // subtle photo vignette
+  const photoVig = ctx.createRadialGradient(innerX + innerW / 2, innerY + innerH / 2, innerW * 0.2, innerX + innerW / 2, innerY + innerH / 2, innerW * 0.85);
+  photoVig.addColorStop(0, 'rgba(255,255,255,0)');
+  photoVig.addColorStop(1, 'rgba(0,0,0,0.22)');
+  ctx.fillStyle = photoVig;
+  ctx.fillRect(innerX, innerY, innerW, innerH);
+  ctx.restore();
+
+  // White border line around photo window
+  ctx.strokeStyle = 'rgba(255,255,255,0.45)';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(innerX, innerY, innerW, innerH);
+
+  // Handwritten text in the free space (EN, per request)
+  ctx.fillStyle = '#24438a';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = '700 30px "Marker Felt", "Bradley Hand", "Comic Sans MS", cursive';
+  ctx.fillText('My MagicBlock time capsule', 0, y + polH - 120);
+  ctx.fillText('sealed until TGE!', 0, y + polH - 72);
+
+  // Optional tiny typed nickname in corner (helps identify user exports)
+  if (state.nickname) {
+    ctx.fillStyle = 'rgba(15,23,42,0.55)';
+    ctx.font = '600 14px ui-sans-serif, system-ui, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillText(`@${String(state.nickname).slice(0, 22)}`, x + 18, y + 22);
+  }
+
+  ctx.restore();
+
+  return canvas.toDataURL('image/png');
+}
+
+async function downloadSealedPolaroidImage() {
+  const dataUrl = await buildPolaroidCapsuleImageDataUrl();
+  const a = document.createElement('a');
+  a.href = dataUrl;
+  a.download = `time-capsule-${slugify(state.nickname || 'user')}-polaroid.png`;
+  a.click();
 }
 
 function escapeHtml(value = '') {
@@ -2352,11 +2742,17 @@ ui.sealBtn.addEventListener('click', () => {
   animateSealSequence();
 });
 
-ui.downloadBtn.addEventListener('click', () => {
-  const a = document.createElement('a');
-  a.href = state._sealedPngDataUrl || renderer.domElement.toDataURL('image/png');
-  a.download = `time-capsule-${slugify(state.nickname || 'user')}.png`;
-  a.click();
+ui.downloadBtn.addEventListener('click', async () => {
+  try {
+    await downloadSealedPolaroidImage();
+  } catch (err) {
+    console.warn('Polaroid export failed, falling back to raw PNG', err);
+    const a = document.createElement('a');
+    a.href = state._sealedPngDataUrl || renderer.domElement.toDataURL('image/png');
+    a.download = `time-capsule-${slugify(state.nickname || 'user')}.png`;
+    a.click();
+    showToast('Polaroid export failed — downloaded standard PNG instead.', 'warning');
+  }
 });
 
 ui.overlayOkBtn?.addEventListener('click', () => {
