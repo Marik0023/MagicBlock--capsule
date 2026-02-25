@@ -1619,34 +1619,15 @@ function drawLockGlyph(ctx, x, y, size, progressClosed) {
 }
 
 function drawLidScreenCanvas(ctx, w, h, time) {
+  // Dark background
+  ctx.fillStyle = 'rgb(7, 11, 17)';
+  ctx.fillRect(0, 0, w, h);
+
   // LID SCREEN FIX: current lid UVs display text mirrored horizontally,
   // so we pre-flip the canvas once here to make the final screen readable.
   ctx.save();
   ctx.translate(w, 0);
   ctx.scale(-1, 1);
-
-  drawScreenGlassBg(ctx, w, h, {
-    radius: 44,
-    border: 4,
-    glow: 0.26,
-    accentA: 'rgba(111,228,255,0.48)',
-    accentB: 'rgba(123,134,255,0.28)',
-    inner: 'rgba(7,11,17,0.92)',
-  });
-  drawTabletBezelChrome(ctx, w, h, time, {
-    radius: 44,
-    outerPad: 2,
-    innerPad: 12,
-    leftButtons: 4,
-    rightButtons: 3,
-    topTabs: true,
-    bottomDock: true,
-  });
-
-  // Small device header chips / indicators (cosmic tablet feel)
-  drawUiPill(ctx, w * 0.08, h * 0.10, w * 0.14, 28, 'SYS', { active: true, align: 'center' });
-  drawUiPill(ctx, w * 0.24, h * 0.10, w * 0.16, 28, 'LOCK', { active: state.sealed || state.sealAnimPlaying });
-  drawUiPill(ctx, w * 0.78, h * 0.10, w * 0.10, 28, 'TX', { active: true });
 
   const closeP = 1 - clamp01(state.lidAnimT);
   const sealP = state.sealAnimPlaying ? closeP : (state.sealed ? 1 : 0);
@@ -1699,52 +1680,18 @@ function drawLidScreenCanvas(ctx, w, h, time) {
   ctx.fillRect(barX, barY, barW, barH);
   ctx.restore();
 
-  // restore pre-flip wrapper
-  // Tiny footer control buttons
-  const btnBaseY = h * 0.82;
-  drawUiPill(ctx, w * 0.10, btnBaseY, w * 0.11, 24, 'A1', { active: true, font: '700 11px Inter, sans-serif' });
-  drawUiPill(ctx, w * 0.22, btnBaseY, w * 0.11, 24, 'A2', { font: '700 11px Inter, sans-serif' });
-  drawUiPill(ctx, w * 0.84, btnBaseY, w * 0.10, 24, 'OK', { active: state.sealed, font: '700 11px Inter, sans-serif' });
-
   ctx.restore();
 }
 
 function drawNameScreenCanvas(ctx, w, h, time) {
   const nick = (state.nickname || 'PLAYER').slice(0, 24);
 
-  drawScreenGlassBg(ctx, w, h, {
-    radius: 36,
-    border: 3,
-    glow: 0.16,
-    accentA: 'rgba(130,220,255,0.3)',
-    accentB: 'rgba(123,134,255,0.2)',
-    inner: 'rgba(10,14,22,0.92)',
-  });
-  drawTabletBezelChrome(ctx, w, h, time, {
-    radius: 36,
-    outerPad: 2,
-    innerPad: 12,
-    leftButtons: 3,
-    rightButtons: 4,
-    topTabs: true,
-    bottomDock: true,
-  });
+  // Dark background
+  ctx.fillStyle = 'rgb(10, 14, 22)';
+  ctx.fillRect(0, 0, w, h);
 
-  // Header system pills / signal bars
-  drawUiPill(ctx, 26, 18, 118, 22, 'IDENT', { active: true, align: 'left' });
-  drawUiPill(ctx, 150, 18, 110, 22, 'SECURE', { active: true, align: 'left' });
-  const sigX = w - 170, sigY = 20;
-  for (let i = 0; i < 5; i++) {
-    const bh = 4 + i * 3;
-    ctx.fillStyle = `rgba(111,228,255,${(0.18 + 0.14 * i + 0.08 * Math.sin(time * 3 + i)).toFixed(3)})`;
-    roundRect(ctx, sigX + i * 12, sigY + (18 - bh), 8, bh, 3);
-    ctx.fill();
-  }
-
+  // Subtle scan lines
   ctx.save();
-  roundRect(ctx, 8, 8, w - 16, h - 16, 32);
-  ctx.clip();
-
   for (let i = 0; i < 9; i++) {
     const yy = ((time * 42 + i * 40) % (h + 80)) - 40;
     const g = ctx.createLinearGradient(0, yy, 0, yy + 24);
@@ -1754,14 +1701,6 @@ function drawNameScreenCanvas(ctx, w, h, time) {
     ctx.fillStyle = g;
     ctx.fillRect(0, yy, w, 24);
   }
-
-  const sweepX = ((time * 240) % (w + 240)) - 120;
-  const sweep = ctx.createLinearGradient(sweepX - 100, 0, sweepX + 100, 0);
-  sweep.addColorStop(0, 'rgba(255,255,255,0)');
-  sweep.addColorStop(0.5, 'rgba(170,235,255,0.18)');
-  sweep.addColorStop(1, 'rgba(255,255,255,0)');
-  ctx.fillStyle = sweep;
-  ctx.fillRect(0, 0, w, h);
   ctx.restore();
 
   ctx.textAlign = 'center';
@@ -1786,13 +1725,7 @@ function drawNameScreenCanvas(ctx, w, h, time) {
   ctx.shadowBlur = 0;
   ctx.font = '600 18px Inter, sans-serif';
   ctx.fillStyle = 'rgba(197,221,255,0.56)';
-  ctx.fillText('IDENTITY LINKED', w / 2, h * 0.2);
-
-  // Bottom functional buttons / labels
-  drawUiPill(ctx, w * 0.12, h * 0.78, w * 0.12, 24, 'SCAN', { active: true, font: '700 11px Inter, sans-serif' });
-  drawUiPill(ctx, w * 0.26, h * 0.78, w * 0.12, 24, 'SYNC', { font: '700 11px Inter, sans-serif' });
-  drawUiPill(ctx, w * 0.62, h * 0.78, w * 0.12, 24, 'NODE', { font: '700 11px Inter, sans-serif' });
-  drawUiPill(ctx, w * 0.76, h * 0.78, w * 0.12, 24, 'OK', { active: true, font: '700 11px Inter, sans-serif' });
+  ctx.fillText('IDENTITY LINKED', w / 2, h * 0.25);
 }
 
 function drawAvatarScreenCanvas(ctx, w, h, time) {
