@@ -34,6 +34,7 @@ const ui = {
 const SUPABASE_URL = 'https://dzamfjphmomvkepirxoh.supabase.co';
 const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_S05m0mHe9SnvWeoU9MZmVA_qZl-K6Q8';
 const CAPSULE_BUCKET = 'capsule-public';
+const CAPSULE_PRIVATE_MESSAGES_TABLE = 'capsule_messages_private';
 const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
 
 const state = {
@@ -2258,7 +2259,17 @@ async function saveCapsuleFeedEntry() {
   if (!state.readyProfile || !state.sealed) return;
   if (!state.avatarDataUrl || !state.nickname) return;
   if (state._feedSavedOnce) return;
+
+  const messageText = String(state.message || '').trim();
+  if (!messageText) {
+    console.warn('[capsule] message is empty, skipping save');
+    return;
+  }
+
   state._feedSavedOnce = true;
+
+  let publicFeedSaved = false;
+  let insertedCapsuleId = null;
 
   try {
     const avatarBlob = dataUrlToBlob(state.avatarDataUrl);
@@ -2282,18 +2293,50 @@ async function saveCapsuleFeedEntry() {
       nickname: String(state.nickname || '').trim().slice(0, 24),
       avatar_url: avatarUrl,
       box_thumb_url: boxThumbUrl,
-      message_length: Math.max(0, Math.min(300, getTrimmedMessageLength())),
+      message_length: Math.max(0, Math.min(300, Array.from(messageText).length)),
       sealed_at: new Date().toISOString(),
     };
 
-    const { error } = await supabase.from('capsule_feed').insert(payload);
-    if (error) throw error;
+    // Insert public feed row and request generated id back so we can link the private letter.
+    const { data: insertedFeedRows, error: publicInsertError } = await supabase
+      .from('capsule_feed')
+      .insert(payload)
+      .select('id')
+      .limit(1);
+
+    if (publicInsertError) throw publicInsertError;
+
+    insertedCapsuleId = insertedFeedRows?.[0]?.id ?? null;
+    publicFeedSaved = true;
+
+    if (!insertedCapsuleId) {
+      throw new Error('capsule_feed insert succeeded but no id was returned. Make sure capsule_feed has an id column and SELECT is allowed by RLS.');
+    }
+
+    // Save the actual letter text privately (not shown in public feed).
+    const privatePayload = {
+      capsule_id: insertedCapsuleId,
+      message_text: messageText.slice(0, 5000),
+    };
+
+    const { error: privateInsertError } = await supabase
+      .from(CAPSULE_PRIVATE_MESSAGES_TABLE)
+      .insert(privatePayload);
+
+    if (privateInsertError) {
+      console.error('[capsule_private] save failed', privateInsertError);
+      showToast('Capsule was saved to public feed, but private letter text was NOT saved. Check Supabase table/RLS.', 'warning');
+    }
 
     await loadCapsuleFeed();
   } catch (err) {
-    state._feedSavedOnce = false;
-    console.error('[capsule_feed] save failed', err);
-    showToast('Could not save to the public feed. Tap Refresh to retry.', 'error');
+    // Avoid duplicate public entries on retry if public insert already succeeded but private insert failed later.
+    if (!publicFeedSaved) {
+      state._feedSavedOnce = false;
+      showToast('Could not save to the public feed. Tap Refresh to retry.', 'error');
+    }
+
+    console.error('[capsule_feed] save failed', err, { publicFeedSaved, insertedCapsuleId });
   }
 }
 
