@@ -1260,29 +1260,13 @@ function easeOutCubic(t) {
 
 function applyTextureOrientation(tex, kind = 'default') {
   if (!tex) return tex;
-
-  // IMPORTANT: canvases applied to GLTF meshes must use flipY=false (same as glTF textures),
-  // otherwise text/icons appear upside-down on screen_* meshes.
   tex.flipY = false;
-
   tex.center.set(0.5, 0.5);
-  tex.rotation = -Math.PI / 2; // GLB screens in this model are UV-rotated 90deg
+  tex.rotation = 0;
   tex.wrapS = THREE.ClampToEdgeWrapping;
   tex.wrapT = THREE.ClampToEdgeWrapping;
   tex.repeat.set(1, 1);
   tex.offset.set(0, 0);
-
-  // Lid screen UV in this GLB is mirrored relative to side screens.
-  // IMPORTANT: negative repeat requires RepeatWrapping (with Clamp it can sample edge color -> blank screen on some GPUs).
-  if (kind === 'lid') {
-    // Lid screen UV is opposite to the side screens in this GLB.
-    // Use +90deg (instead of the shared -90deg) + Y mirror to keep the lid display upright.
-    tex.rotation = Math.PI / 2;
-    tex.wrapT = THREE.RepeatWrapping;
-    tex.repeat.y = -1;
-    tex.offset.y = 1;
-  }
-
   tex.needsUpdate = true;
   return tex;
 }
@@ -1619,26 +1603,27 @@ function drawLockGlyph(ctx, x, y, size, progressClosed) {
 }
 
 function drawLidScreenCanvas(ctx, w, h, time) {
-  // Dark background
   ctx.fillStyle = 'rgb(7, 11, 17)';
   ctx.fillRect(0, 0, w, h);
 
-  // Canvas is portrait (w=512, h=1024) but UV rotation renders it landscape.
-  // Draw content as if painting a portrait canvas that will be rotated -90deg on screen.
-  // So canvas X = screen Y (bottom→top), canvas Y = screen X (left→right).
-  // We draw content centered in canvas coords normally - the texture rotation handles display.
+  // With flipY=false and no texture rotation, lid UV is mirrored horizontally.
+  // Pre-flip canvas horizontally to compensate.
+  ctx.save();
+  ctx.translate(w, 0);
+  ctx.scale(-1, 1);
 
   const closeP = 1 - clamp01(state.lidAnimT);
   const sealP = state.sealAnimPlaying ? closeP : (state.sealed ? 1 : 0);
 
-  // Lock glyph on left portion of canvas (will appear left side on screen)
-  drawLockGlyph(ctx, w * 0.28, h * 0.5, w * 0.42, sealP);
+  // Lock glyph left side
+  drawLockGlyph(ctx, w * 0.18, h * 0.5, h * 0.72, sealP);
 
+  // Status text right of lock
   const status = state.sealed ? 'SEALED' : (state.sealAnimPlaying ? 'LOCKING…' : 'UNLOCKED');
-  ctx.textAlign = 'center';
+  ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
 
-  const titleGrad = ctx.createLinearGradient(0, h * 0.3, 0, h * 0.5);
+  const titleGrad = ctx.createLinearGradient(w * 0.32, 0, w * 0.95, 0);
   if (state.sealed) {
     titleGrad.addColorStop(0, '#d7f2ff');
     titleGrad.addColorStop(1, '#8ad5ff');
@@ -1647,16 +1632,17 @@ function drawLidScreenCanvas(ctx, w, h, time) {
     titleGrad.addColorStop(1, '#83ffd0');
   }
   ctx.fillStyle = titleGrad;
-  ctx.font = '800 52px Inter, sans-serif';
-  ctx.fillText(status, w * 0.72, h * 0.38);
+  ctx.font = '800 72px Inter, sans-serif';
+  ctx.fillText(status, w * 0.34, h * 0.38);
 
-  ctx.font = '500 22px Inter, sans-serif';
+  ctx.font = '500 28px Inter, sans-serif';
   ctx.fillStyle = 'rgba(211,233,255,0.72)';
-  ctx.fillText('TGE CAPSULE SECURITY', w * 0.72, h * 0.50);
+  ctx.fillText('TGE CAPSULE SECURITY', w * 0.34, h * 0.60);
 
-  const barX = w * 0.52, barY = h * 0.58, barW = w * 0.42, barH = 20;
+  // Progress bar
+  const barX = w * 0.34, barY = h * 0.74, barW = w * 0.58, barH = 24;
   ctx.fillStyle = 'rgba(255,255,255,0.06)';
-  roundRect(ctx, barX, barY, barW, barH, 10);
+  roundRect(ctx, barX, barY, barW, barH, 12);
   ctx.fill();
 
   const fillP = state.sealed ? 1 : (state.sealAnimPlaying ? easeOutCubic(closeP) : 0.18 + Math.sin(time * 2.3) * 0.03);
@@ -1664,12 +1650,12 @@ function drawLidScreenCanvas(ctx, w, h, time) {
   fillGrad.addColorStop(0, state.sealed ? 'rgba(120,214,255,0.95)' : 'rgba(111,255,203,0.95)');
   fillGrad.addColorStop(1, 'rgba(125,136,255,0.9)');
   ctx.fillStyle = fillGrad;
-  roundRect(ctx, barX + 2, barY + 2, Math.max(8, (barW - 4) * clamp01(fillP)), barH - 4, 8);
+  roundRect(ctx, barX + 2, barY + 2, Math.max(8, (barW - 4) * clamp01(fillP)), barH - 4, 10);
   ctx.fill();
 
   const sweepX = ((time * 180) % (barW + 120)) - 60;
   ctx.save();
-  roundRect(ctx, barX + 2, barY + 2, barW - 4, barH - 4, 8);
+  roundRect(ctx, barX + 2, barY + 2, barW - 4, barH - 4, 10);
   ctx.clip();
   const sweep = ctx.createLinearGradient(barX + sweepX - 40, barY, barX + sweepX + 40, barY);
   sweep.addColorStop(0, 'rgba(255,255,255,0)');
@@ -1678,14 +1664,21 @@ function drawLidScreenCanvas(ctx, w, h, time) {
   ctx.fillStyle = sweep;
   ctx.fillRect(barX, barY, barW, barH);
   ctx.restore();
+
+  ctx.restore();
 }
 
 function drawNameScreenCanvas(ctx, w, h, time) {
   const nick = (state.nickname || 'PLAYER').slice(0, 24);
 
-  // Dark background
   ctx.fillStyle = 'rgb(10, 14, 22)';
   ctx.fillRect(0, 0, w, h);
+
+  // Name/side screens are mirrored horizontally with flipY=false + no rotation.
+  // Pre-flip to compensate.
+  ctx.save();
+  ctx.translate(w, 0);
+  ctx.scale(-1, 1);
 
   // Subtle scan lines
   for (let i = 0; i < 9; i++) {
@@ -1701,16 +1694,14 @@ function drawNameScreenCanvas(ctx, w, h, time) {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
-  // "IDENTITY LINKED" label
-  ctx.font = '600 28px Inter, sans-serif';
+  ctx.font = '500 26px Inter, sans-serif';
   ctx.fillStyle = 'rgba(197,221,255,0.56)';
-  ctx.fillText('IDENTITY LINKED', w / 2, h * 0.38);
+  ctx.fillText('IDENTITY LINKED', w / 2, h * 0.28);
 
-  // Nickname — scale font to fit width
-  let size = 72;
-  if (nick.length > 10) size = 56;
-  if (nick.length > 14) size = 44;
-  if (nick.length > 18) size = 36;
+  let size = 110;
+  if (nick.length > 10) size = 86;
+  if (nick.length > 14) size = 68;
+  if (nick.length > 18) size = 52;
 
   const pulse = 0.92 + Math.sin(time * 3.8) * 0.04;
   const nameGrad = ctx.createLinearGradient(0, 0, w, 0);
@@ -1722,58 +1713,49 @@ function drawNameScreenCanvas(ctx, w, h, time) {
   ctx.shadowBlur = 18;
   ctx.fillStyle = nameGrad;
   ctx.font = `800 ${Math.round(size * pulse)}px Inter, sans-serif`;
-  ctx.fillText(nick, w / 2, h * 0.52);
+  ctx.fillText(nick, w / 2, h * 0.55);
   ctx.shadowBlur = 0;
+
+  ctx.restore();
 }
 
 function drawAvatarScreenCanvas(ctx, w, h, time) {
-  // Fill entire canvas with dark background first
   ctx.fillStyle = 'rgb(8, 10, 18)';
   ctx.fillRect(0, 0, w, h);
 
-  const pad = 0;
-  const innerX = pad;
-  const innerY = pad;
-  const innerW = w - pad * 2;
-  const innerH = h - pad * 2;
-
+  // Side screens are mirrored horizontally with flipY=false + no rotation.
+  // Pre-flip to compensate.
   ctx.save();
-  ctx.beginPath();
-  ctx.rect(innerX, innerY, innerW, innerH);
-  ctx.clip();
+  ctx.translate(w, 0);
+  ctx.scale(-1, 1);
 
   const img = state.avatarImgEl;
   if (img && state.avatarImgLoaded) {
-    // contain: fit full image within canvas, no cropping
-    const scale = Math.min(innerW / img.width, innerH / img.height);
+    // cover: fill entire canvas, crop edges if needed
+    const scale = Math.max(w / img.width, h / img.height);
     const dw = img.width * scale;
     const dh = img.height * scale;
-    const dx = innerX + (innerW - dw) / 2;
-    const dy = innerY + (innerH - dh) / 2;
+    const dx = (w - dw) / 2;
+    const dy = (h - dh) / 2;
     ctx.drawImage(img, dx, dy, dw, dh);
   } else {
-    const ph = ctx.createLinearGradient(innerX, innerY, innerX + innerW, innerY + innerH);
-    ph.addColorStop(0, 'rgba(28,38,56,0.95)');
-    ph.addColorStop(1, 'rgba(14,20,30,0.95)');
-    ctx.fillStyle = ph;
-    ctx.fillRect(innerX, innerY, innerW, innerH);
-
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.font = '700 30px Inter, sans-serif';
-    ctx.fillStyle = 'rgba(200,220,255,0.7)';
+    ctx.font = '700 36px Inter, sans-serif';
+    ctx.fillStyle = 'rgba(200,220,255,0.5)';
     ctx.fillText('AVATAR', w / 2, h / 2);
   }
 
-  const sweepY = ((time * 180) % (innerH + 160)) - 80;
-  const sg = ctx.createLinearGradient(0, innerY + sweepY - 40, 0, innerY + sweepY + 40);
+  // Subtle scan sweep
+  const sweepY = ((time * 180) % (h + 160)) - 80;
+  const sg = ctx.createLinearGradient(0, sweepY - 40, 0, sweepY + 40);
   sg.addColorStop(0, 'rgba(255,255,255,0)');
-  sg.addColorStop(0.5, 'rgba(170,232,255,0.16)');
+  sg.addColorStop(0.5, 'rgba(170,232,255,0.12)');
   sg.addColorStop(1, 'rgba(255,255,255,0)');
   ctx.fillStyle = sg;
-  ctx.fillRect(innerX, innerY, innerW, innerH);
-  ctx.restore();
+  ctx.fillRect(0, 0, w, h);
 
+  ctx.restore();
 }
 
 function renderDynamicScreens(force = false) {
@@ -1785,7 +1767,7 @@ function renderDynamicScreens(force = false) {
   state.lastScreenFxDraw = now;
 
   if (state.screens.lid?.isMesh) {
-    const pack = ensureScreenFxPack('lid', 512, 1024);
+    const pack = ensureScreenFxPack('lid', 1024, 512);
     drawLidScreenCanvas(pack.ctx, pack.width, pack.height, now);
     pack.tex.needsUpdate = true;
     if (!(state.screens.lid.material && state.screens.lid.material.map === pack.tex)) {
@@ -1795,7 +1777,7 @@ function renderDynamicScreens(force = false) {
   }
 
   if (state.screens.name?.isMesh) {
-    const pack = ensureScreenFxPack('name', 384, 1024);
+    const pack = ensureScreenFxPack('name', 1024, 384);
     drawNameScreenCanvas(pack.ctx, pack.width, pack.height, now);
     pack.tex.needsUpdate = true;
     if (!(state.screens.name.material && state.screens.name.material.map === pack.tex)) {
@@ -1805,7 +1787,7 @@ function renderDynamicScreens(force = false) {
   }
 
   if (state.screens.avatar?.isMesh) {
-    const pack = ensureScreenFxPack('avatar', 640, 1024);
+    const pack = ensureScreenFxPack('avatar', 1024, 512);
     drawAvatarScreenCanvas(pack.ctx, pack.width, pack.height, now);
     pack.tex.needsUpdate = true;
     if (!(state.screens.avatar.material && state.screens.avatar.material.map === pack.tex)) {
