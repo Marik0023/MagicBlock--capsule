@@ -1270,10 +1270,12 @@ function easeOutCubic(t) {
 
 const SCREEN_UV_TUNE = {
   // NOTE:
-  // These values compensate for the current GLB UV layout (rotated screens + a few overscanned UVs).
-  // If you tweak the model again and one screen looks shifted, you only need to edit this object.
+  // These values compensate for the current GLB UV layout.
+  // The model was redesigned in v2 — UVs are now axis-aligned (no 90° rotation bake).
+  // rotation: 0 = natural UV orientation for all screens.
+  // Tweak repeatX/Y + offsetX/Y if a screen looks shifted or overscanned.
   default: {
-    rotation: -Math.PI / 2,
+    rotation: 0,
     repeatX: 1,
     repeatY: 1,
     offsetX: 0,
@@ -1284,55 +1286,56 @@ const SCREEN_UV_TUNE = {
     wrapT: 'clamp',
   },
 
-  // Lid screen uses a mirrored UV orientation and a cropped UV island.
+  // Lid screen — wide landscape panel on top.
   lid: {
-    rotation: Math.PI / 2,
-    repeatX: 1.28,
-    repeatY: 1.09,
-    offsetX: -0.28,
-    offsetY: -0.09,
+    rotation: 0,
+    repeatX: 1.0,
+    repeatY: 1.0,
+    offsetX: 0.0,
+    offsetY: 0.0,
     flipX: false,
-    flipY: true,
-    wrapS: 'repeat',
-    wrapT: 'repeat',
+    flipY: false,
+    wrapS: 'clamp',
+    wrapT: 'clamp',
   },
 
-  // Name panel UV extends slightly beyond 0..1, so clamp smears edges.
+  // Name panel — horizontal strip in the center.
   name: {
-    rotation: -Math.PI / 2,
-    repeatX: 0.875,
-    repeatY: 0.963,
-    offsetX: 0.056,
-    offsetY: 0.059,
+    rotation: 0,
+    repeatX: 1.0,
+    repeatY: 1.0,
+    offsetX: 0.0,
+    offsetY: 0.0,
     flipX: false,
     flipY: false,
-    wrapS: 'repeat',
-    wrapT: 'repeat',
+    wrapS: 'clamp',
+    wrapT: 'clamp',
   },
 
-  // Avatar / logo panels are nearly full-range UVs but slightly overscanned vertically.
+  // Avatar — large square panel (bottom center).
   avatar: {
-    rotation: -Math.PI / 2,
+    rotation: 0,
     repeatX: 1.0,
-    repeatY: 1.04,
+    repeatY: 1.0,
     offsetX: 0.0,
-    offsetY: -0.04,
+    offsetY: 0.0,
     flipX: false,
     flipY: false,
-    wrapS: 'repeat',
-    wrapT: 'repeat',
+    wrapS: 'clamp',
+    wrapT: 'clamp',
   },
 
+  // Logo — small portrait panel on the left side.
   logo: {
-    rotation: -Math.PI / 2,
+    rotation: 0,
     repeatX: 1.0,
-    repeatY: 1.04,
+    repeatY: 1.0,
     offsetX: 0.0,
-    offsetY: -0.04,
+    offsetY: 0.0,
     flipX: false,
     flipY: false,
-    wrapS: 'repeat',
-    wrapT: 'repeat',
+    wrapS: 'clamp',
+    wrapT: 'clamp',
   },
 };
 
@@ -1710,11 +1713,8 @@ function drawLockGlyph(ctx, x, y, size, progressClosed) {
 }
 
 function drawLidScreenCanvas(ctx, w, h, time) {
-  // LID SCREEN FIX: current lid UVs display text mirrored horizontally,
-  // so we pre-flip the canvas once here to make the final screen readable.
+  // NOTE: UV orientation is handled by SCREEN_UV_TUNE.lid — no manual canvas flip needed.
   ctx.save();
-  ctx.translate(w, 0);
-  ctx.scale(-1, 1);
 
   drawScreenGlassBg(ctx, w, h, {
     radius: 44,
@@ -1987,144 +1987,269 @@ function drawAvatarScreenCanvas(ctx, w, h, time) {
 
 
 function drawLogoScreenCanvas(ctx, w, h, time) {
-  drawScreenGlassBg(ctx, w, h, {
-    radius: 32,
-    border: 3,
-    glow: 0.22,
-    accentA: 'rgba(111,228,255,0.30)',
-    accentB: 'rgba(123,134,255,0.22)',
-    inner: 'rgba(8,12,19,0.94)',
-  });
-  drawTabletBezelChrome(ctx, w, h, time, {
-    radius: 32,
-    outerPad: 2,
-    innerPad: 10,
-    leftButtons: 2,
-    rightButtons: 3,
-    topTabs: true,
-    bottomDock: true,
-  });
+  // Beautiful space-tablet display for screen_logo (small portrait panel on the left).
+  // Features: deep space background, animated nebula glow, star field, orbit rings,
+  // MagicBlock logo prominently centred, animated scan sweep, status HUD.
 
-  drawUiPill(ctx, w * 0.08, h * 0.07, w * 0.34, 20, 'MB NODE', { active: true, align: 'left', font: '700 10px Inter, sans-serif' });
-  drawUiPill(ctx, w * 0.66, h * 0.07, w * 0.18, 20, 'RX', { active: true, font: '700 10px Inter, sans-serif' });
+  ctx.clearRect(0, 0, w, h);
 
-  const pad = Math.max(24, Math.round(Math.min(w, h) * 0.12));
-  const innerX = pad;
-  const innerY = Math.round(h * 0.18);
-  const innerW = w - pad * 2;
-  const innerH = h - innerY - pad;
-
-  const panelGrad = ctx.createLinearGradient(innerX, innerY, innerX + innerW, innerY + innerH);
-  panelGrad.addColorStop(0, 'rgba(18,28,42,0.96)');
-  panelGrad.addColorStop(0.65, 'rgba(10,18,30,0.94)');
-  panelGrad.addColorStop(1, 'rgba(8,14,24,0.95)');
-  ctx.fillStyle = panelGrad;
-  roundRect(ctx, innerX, innerY, innerW, innerH, 18);
+  // ── Deep space background ──────────────────────────────────────────────────
+  const bg = ctx.createRadialGradient(w * 0.5, h * 0.42, 0, w * 0.5, h * 0.5, Math.max(w, h) * 0.72);
+  bg.addColorStop(0,   'rgba(10,18,36,1)');
+  bg.addColorStop(0.5, 'rgba(6,12,26,1)');
+  bg.addColorStop(1,   'rgba(3,6,14,1)');
+  ctx.fillStyle = bg;
+  roundRect(ctx, 0, 0, w, h, 28);
   ctx.fill();
 
-  ctx.strokeStyle = 'rgba(149,227,255,0.24)';
-  ctx.lineWidth = 2;
-  roundRect(ctx, innerX, innerY, innerW, innerH, 18);
-  ctx.stroke();
-
+  // Clip everything to screen boundary
   ctx.save();
-  roundRect(ctx, innerX + 2, innerY + 2, innerW - 4, innerH - 4, 16);
+  roundRect(ctx, 0, 0, w, h, 28);
   ctx.clip();
 
-  // subtle scanlines / grid
-  for (let y = innerY; y < innerY + innerH; y += 6) {
-    ctx.fillStyle = 'rgba(150,215,255,0.02)';
-    ctx.fillRect(innerX, y, innerW, 1);
+  // ── Star field ────────────────────────────────────────────────────────────
+  // Use a seeded pseudo-random for consistent stars
+  const stars = [];
+  let rng = 42;
+  const rand = () => { rng = (rng * 1664525 + 1013904223) & 0xffffffff; return (rng >>> 0) / 0xffffffff; };
+  for (let i = 0; i < 55; i++) {
+    stars.push({ x: rand(), y: rand(), r: 0.5 + rand() * 1.4, p: rand() * Math.PI * 2 });
   }
-  for (let x = innerX; x < innerX + innerW; x += 14) {
-    ctx.fillStyle = 'rgba(130,190,255,0.02)';
-    ctx.fillRect(x, innerY, 1, innerH);
+  for (const s of stars) {
+    const alpha = 0.3 + 0.5 * Math.abs(Math.sin(time * (0.6 + s.p * 0.4) + s.p));
+    ctx.beginPath();
+    ctx.arc(s.x * w, s.y * h, s.r, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(200,228,255,${alpha.toFixed(3)})`;
+    ctx.fill();
   }
 
-  // orbit rings
-  const cx = innerX + innerW * 0.5;
-  const cy = innerY + innerH * 0.55;
-  const r1 = Math.min(innerW, innerH) * 0.28;
-  const r2 = r1 * 1.32;
-  const rotA = time * 0.65;
-  const rotB = -time * 0.45;
+  // ── Nebula glow ───────────────────────────────────────────────────────────
+  const nX = w * 0.5, nY = h * 0.43;
+  const ng = ctx.createRadialGradient(nX, nY, 0, nX, nY, w * 0.62);
+  const nebulaAlpha = 0.09 + 0.04 * Math.sin(time * 0.9);
+  ng.addColorStop(0,   `rgba(90,160,255,${nebulaAlpha.toFixed(3)})`);
+  ng.addColorStop(0.5, `rgba(110,80,220,${(nebulaAlpha * 0.6).toFixed(3)})`);
+  ng.addColorStop(1,   'rgba(0,0,0,0)');
+  ctx.fillStyle = ng;
+  ctx.fillRect(0, 0, w, h);
 
-  const drawArcRing = (r, a, alpha) => {
-    ctx.save();
-    ctx.translate(cx, cy);
-    ctx.rotate(a);
-    ctx.strokeStyle = `rgba(123,210,255,${alpha})`;
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(0, 0, r, 0.25, 1.65);
-    ctx.stroke();
-    ctx.strokeStyle = `rgba(125,136,255,${alpha * 0.9})`;
-    ctx.beginPath();
-    ctx.arc(0, 0, r, 2.3, 3.75);
-    ctx.stroke();
-    ctx.restore();
-  };
-  drawArcRing(r2, rotA, 0.28);
-  drawArcRing(r1, rotB, 0.22);
+  // ── Bezel / chrome border ─────────────────────────────────────────────────
+  // Outer edge glow
+  ctx.shadowColor = 'rgba(100,200,255,0.28)';
+  ctx.shadowBlur = 16;
+  ctx.strokeStyle = 'rgba(80,170,255,0.50)';
+  ctx.lineWidth = 2.5;
+  roundRect(ctx, 2, 2, w - 4, h - 4, 26);
+  ctx.stroke();
+  ctx.shadowBlur = 0;
 
-  const logoPanelW = innerW * 0.64;
-  const logoPanelH = innerH * 0.54;
-  const logoPanelX = cx - logoPanelW / 2;
-  const logoPanelY = cy - logoPanelH / 2;
-  const lg = ctx.createLinearGradient(logoPanelX, logoPanelY, logoPanelX + logoPanelW, logoPanelY + logoPanelH);
-  lg.addColorStop(0, 'rgba(230,245,255,0.90)');
-  lg.addColorStop(0.55, 'rgba(190,230,255,0.78)');
-  lg.addColorStop(1, 'rgba(165,210,245,0.72)');
-  ctx.fillStyle = lg;
-  roundRect(ctx, logoPanelX, logoPanelY, logoPanelW, logoPanelH, 16);
-  ctx.fill();
-
-  ctx.strokeStyle = 'rgba(255,255,255,0.22)';
-  ctx.lineWidth = 1.5;
-  roundRect(ctx, logoPanelX, logoPanelY, logoPanelW, logoPanelH, 16);
+  // Inner border
+  ctx.strokeStyle = 'rgba(50,110,200,0.30)';
+  ctx.lineWidth = 1;
+  roundRect(ctx, 8, 8, w - 16, h - 16, 22);
   ctx.stroke();
 
-  // draw brand logo (black png preferred), fallback to text mark
-  const logoImg = state.brandLogoImgEl;
-  if (logoImg && state.brandLogoLoaded) {
-    const iw = logoImg.naturalWidth || logoImg.width || 1;
-    const ih = logoImg.naturalHeight || logoImg.height || 1;
-    const scale = Math.min((logoPanelW * 0.78) / iw, (logoPanelH * 0.78) / ih);
-    const dw = iw * scale;
-    const dh = ih * scale;
-    const dx = cx - dw / 2;
-    const dy = cy - dh / 2;
+  // ── Header bar ────────────────────────────────────────────────────────────
+  const hdrH = 36;
+  const hdrGrad = ctx.createLinearGradient(0, 0, w, 0);
+  hdrGrad.addColorStop(0,   'rgba(20,38,70,0.92)');
+  hdrGrad.addColorStop(0.5, 'rgba(14,28,56,0.88)');
+  hdrGrad.addColorStop(1,   'rgba(20,38,70,0.92)');
+  ctx.fillStyle = hdrGrad;
+  ctx.fillRect(0, 0, w, hdrH);
+  ctx.strokeStyle = 'rgba(80,170,255,0.25)';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, hdrH); ctx.lineTo(w, hdrH); ctx.stroke();
 
+  // Node label
+  ctx.font = '700 9px Inter, monospace';
+  ctx.fillStyle = 'rgba(130,210,255,0.90)';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('MB NODE', 14, hdrH / 2);
+
+  // Status dot
+  const dotAlpha = 0.65 + 0.35 * Math.abs(Math.sin(time * 2.2));
+  ctx.beginPath();
+  ctx.arc(w - 30, hdrH / 2, 4, 0, Math.PI * 2);
+  ctx.fillStyle = `rgba(0,255,180,${dotAlpha.toFixed(3)})`;
+  ctx.fill();
+  ctx.font = '600 8px Inter, monospace';
+  ctx.fillStyle = 'rgba(0,255,180,0.80)';
+  ctx.textAlign = 'right';
+  ctx.fillText('ON', w - 14, hdrH / 2);
+
+  // ── Main content area ─────────────────────────────────────────────────────
+  const cPad = 14;
+  const cY = hdrH + 10;
+  const cW = w - cPad * 2;
+  const cH = h - cY - 48; // leave room for footer
+  const cx = cPad + cW / 2;
+  const cy = cY + cH / 2;
+
+  // Subtle inner panel bg
+  const panBg = ctx.createLinearGradient(cPad, cY, cPad + cW, cY + cH);
+  panBg.addColorStop(0,   'rgba(18,32,58,0.72)');
+  panBg.addColorStop(1,   'rgba(10,18,38,0.68)');
+  ctx.fillStyle = panBg;
+  roundRect(ctx, cPad, cY, cW, cH, 16);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(80,150,255,0.20)';
+  ctx.lineWidth = 1;
+  roundRect(ctx, cPad, cY, cW, cH, 16);
+  ctx.stroke();
+
+  // ── Orbit rings ───────────────────────────────────────────────────────────
+  ctx.save();
+  roundRect(ctx, cPad + 2, cY + 2, cW - 4, cH - 4, 14);
+  ctx.clip();
+
+  const r1 = Math.min(cW, cH) * 0.30;
+  const r2 = r1 * 1.45;
+  const r3 = r2 * 1.30;
+  const rotA =  time * 0.55;
+  const rotB = -time * 0.38;
+  const rotC =  time * 0.22;
+
+  const drawOrbitArc = (cx2, cy2, r, angle, alpha, colorA, colorB) => {
     ctx.save();
-    ctx.shadowColor = 'rgba(90,205,255,0.20)';
-    ctx.shadowBlur = 14;
-    ctx.drawImage(logoImg, dx, dy, dw, dh);
+    ctx.translate(cx2, cy2);
+    ctx.rotate(angle);
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = colorA.replace('{a}', alpha.toFixed(3));
+    ctx.beginPath(); ctx.arc(0, 0, r, 0.3, 1.8); ctx.stroke();
+    ctx.strokeStyle = colorB.replace('{a}', (alpha * 0.7).toFixed(3));
+    ctx.beginPath(); ctx.arc(0, 0, r, 2.4, 4.1); ctx.stroke();
     ctx.restore();
-  } else {
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.font = `800 ${Math.round(Math.min(innerW, innerH) * 0.18)}px Inter, sans-serif`;
-    ctx.fillStyle = 'rgba(10,20,35,0.92)';
-    ctx.fillText('MB', cx, cy);
-  }
+  };
 
-  // scanning sweep
-  const sweepY = innerY + (((time * 120) % (innerH + 100)) - 50);
-  const sg = ctx.createLinearGradient(0, sweepY - 26, 0, sweepY + 26);
-  sg.addColorStop(0, 'rgba(255,255,255,0)');
-  sg.addColorStop(0.5, 'rgba(140,235,255,0.10)');
-  sg.addColorStop(1, 'rgba(255,255,255,0)');
-  ctx.fillStyle = sg;
-  ctx.fillRect(innerX, innerY, innerW, innerH);
+  drawOrbitArc(cx, cy, r3, rotC, 0.12, 'rgba(80,140,255,{a})',  'rgba(140,80,255,{a})');
+  drawOrbitArc(cx, cy, r2, rotA, 0.22, 'rgba(100,200,255,{a})', 'rgba(120,120,255,{a})');
+  drawOrbitArc(cx, cy, r1, rotB, 0.18, 'rgba(0,220,200,{a})',   'rgba(80,180,255,{a})');
+
+  // Orbit dots (nodes)
+  const orbitDot = (r, angle, baseAngle, col) => {
+    const ax = cx + r * Math.cos(baseAngle + angle);
+    const ay = cy + r * Math.sin(baseAngle + angle);
+    ctx.beginPath();
+    ctx.arc(ax, ay, 3, 0, Math.PI * 2);
+    ctx.fillStyle = col;
+    ctx.fill();
+  };
+  orbitDot(r2, rotA, 0,           'rgba(140,220,255,0.90)');
+  orbitDot(r2, rotA, Math.PI,     'rgba(100,180,255,0.60)');
+  orbitDot(r1, rotB, Math.PI / 3, 'rgba(0,240,200,0.80)');
 
   ctx.restore();
 
-  drawUiPill(ctx, w * 0.10, h * 0.84, w * 0.18, 20, 'LINK', { active: true, font: '700 10px Inter, sans-serif' });
-  drawUiPill(ctx, w * 0.30, h * 0.84, w * 0.16, 20, 'LOGO', { font: '700 10px Inter, sans-serif' });
-  drawUiPill(ctx, w * 0.68, h * 0.84, w * 0.20, 20, state.brandLogoLoaded ? 'SYNC OK' : 'WAIT', {
-    active: state.brandLogoLoaded,
-    font: '700 10px Inter, sans-serif'
-  });
+  // ── Logo panel (white card with MagicBlock logo) ───────────────────────────
+  const lpW = cW * 0.70;
+  const lpH = cH * 0.42;
+  const lpX = cx - lpW / 2;
+  const lpY = cy - lpH / 2 - 6;
+
+  // Card background
+  const cardGrad = ctx.createLinearGradient(lpX, lpY, lpX + lpW, lpY + lpH);
+  cardGrad.addColorStop(0,   'rgba(235,245,255,0.96)');
+  cardGrad.addColorStop(0.6, 'rgba(205,228,250,0.94)');
+  cardGrad.addColorStop(1,   'rgba(185,215,245,0.92)');
+  ctx.fillStyle = cardGrad;
+  roundRect(ctx, lpX, lpY, lpW, lpH, 12);
+  ctx.fill();
+
+  // Card glow
+  ctx.save();
+  ctx.shadowColor = 'rgba(100,200,255,0.55)';
+  ctx.shadowBlur = 18;
+  ctx.strokeStyle = 'rgba(255,255,255,0.60)';
+  ctx.lineWidth = 1.5;
+  roundRect(ctx, lpX, lpY, lpW, lpH, 12);
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+
+  // Draw the MB logo image (black PNG on white card)
+  const logoImg = state.brandLogoImgEl;
+  if (logoImg && state.brandLogoLoaded) {
+    const iw = logoImg.naturalWidth  || logoImg.width  || 1;
+    const ih = logoImg.naturalHeight || logoImg.height || 1;
+    const scale = Math.min((lpW * 0.75) / iw, (lpH * 0.75) / ih);
+    const dw = iw * scale;
+    const dh = ih * scale;
+    const dx = cx - dw / 2;
+    const dy = lpY + (lpH - dh) / 2;
+    ctx.drawImage(logoImg, dx, dy, dw, dh);
+  } else {
+    // Fallback: MB monogram
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = `900 ${Math.round(Math.min(lpW, lpH) * 0.42)}px Inter, sans-serif`;
+    ctx.fillStyle = 'rgba(10,20,40,0.92)';
+    ctx.fillText('MB', cx, lpY + lpH / 2);
+  }
+  ctx.restore();
+
+  // ── Scan sweep (cosmetic) ─────────────────────────────────────────────────
+  ctx.save();
+  roundRect(ctx, cPad + 2, cY + 2, cW - 4, cH - 4, 14);
+  ctx.clip();
+  const sweepY = cY + (((time * 90) % (cH + 80)) - 40);
+  const sg = ctx.createLinearGradient(0, sweepY - 20, 0, sweepY + 20);
+  sg.addColorStop(0,   'rgba(255,255,255,0)');
+  sg.addColorStop(0.5, 'rgba(140,230,255,0.10)');
+  sg.addColorStop(1,   'rgba(255,255,255,0)');
+  ctx.fillStyle = sg;
+  ctx.fillRect(cPad, cY, cW, cH);
+  ctx.restore();
+
+  // ── Data readout label under logo card ────────────────────────────────────
+  const lblY = lpY + lpH + 10;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.font = '600 8px Inter, monospace';
+  ctx.fillStyle = 'rgba(110,200,255,0.70)';
+  ctx.fillText('MAGICBLOCK PROTOCOL', cx, lblY);
+
+  // Tiny data tickers
+  const tickPhase = (time * 0.7) % 1;
+  const tick1 = (Math.sin(time * 1.3) > 0) ? '▲ 0x4F' : '▼ 0xA2';
+  ctx.font = '600 7px Inter, monospace';
+  ctx.fillStyle = `rgba(0,220,170,${(0.55 + 0.35 * Math.sin(time * 3.1)).toFixed(3)})`;
+  ctx.fillText(tick1, cx - cW * 0.18, lblY + 14);
+  ctx.fillStyle = `rgba(120,160,255,${(0.55 + 0.35 * Math.sin(time * 2.7 + 1)).toFixed(3)})`;
+  ctx.fillText(`T+${Math.floor(time % 1000).toString().padStart(4,'0')}`, cx + cW * 0.18, lblY + 14);
+
+  // ── Footer ────────────────────────────────────────────────────────────────
+  const fY = h - 38;
+  ctx.strokeStyle = 'rgba(80,150,255,0.20)';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, fY); ctx.lineTo(w, fY); ctx.stroke();
+
+  // Sync indicator
+  const syncActive = state.brandLogoLoaded;
+  const syncGlow = 0.6 + 0.4 * Math.abs(Math.sin(time * 2.5));
+  ctx.beginPath();
+  ctx.arc(w * 0.22, fY + 14, 4, 0, Math.PI * 2);
+  ctx.fillStyle = syncActive
+    ? `rgba(0,255,180,${syncGlow.toFixed(3)})`
+    : `rgba(255,180,0,${syncGlow.toFixed(3)})`;
+  ctx.fill();
+
+  ctx.font = '700 8px Inter, monospace';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = 'rgba(180,210,255,0.72)';
+  ctx.fillText(syncActive ? 'SYNC OK' : 'LINKING', w * 0.30, fY + 14);
+
+  // Signal bars (right side)
+  for (let i = 0; i < 4; i++) {
+    const bh = 4 + i * 3;
+    const bAlpha = 0.3 + 0.55 * (i / 3) + 0.12 * Math.sin(time * 2 + i);
+    ctx.fillStyle = `rgba(80,200,255,${bAlpha.toFixed(3)})`;
+    roundRect(ctx, w - 28 + i * 7, fY + 28 - bh, 5, bh, 2);
+    ctx.fill();
+  }
+
+  ctx.restore(); // end screen clip
 }
 
 function renderDynamicScreens(force = false) {
@@ -2136,7 +2261,7 @@ function renderDynamicScreens(force = false) {
   state.lastScreenFxDraw = now;
 
   if (state.screens.lid?.isMesh) {
-    const pack = ensureScreenFxPack('lid', 1024, 512);
+    const pack = ensureScreenFxPack('lid', 1024, 384);
     drawLidScreenCanvas(pack.ctx, pack.width, pack.height, now);
     pack.tex.needsUpdate = true;
     if (!(state.screens.lid.material && state.screens.lid.material.map === pack.tex)) {
@@ -2146,7 +2271,7 @@ function renderDynamicScreens(force = false) {
   }
 
   if (state.screens.name?.isMesh) {
-    const pack = ensureScreenFxPack('name', 1024, 384);
+    const pack = ensureScreenFxPack('name', 768, 768);
     drawNameScreenCanvas(pack.ctx, pack.width, pack.height, now);
     pack.tex.needsUpdate = true;
     if (!(state.screens.name.material && state.screens.name.material.map === pack.tex)) {
@@ -2166,13 +2291,13 @@ function renderDynamicScreens(force = false) {
   }
 
   if (state.screens.logo?.isMesh) {
-    const pack = ensureScreenFxPack('logo', 768, 768);
+    const pack = ensureScreenFxPack('logo', 512, 768);
     drawLogoScreenCanvas(pack.ctx, pack.width, pack.height, now);
     pack.tex.needsUpdate = true;
     if (!(state.screens.logo.material && state.screens.logo.material.map === pack.tex)) {
-      state.screens.logo.material = createScreenMaterial(pack.tex, 0x081523, 0.62);
+      state.screens.logo.material = createScreenMaterial(pack.tex, 0x081523, 0.68);
     }
-    state.screens.logo.material.emissiveIntensity = 0.50 + Math.sin(now * 2.6 + 1.4) * 0.06;
+    state.screens.logo.material.emissiveIntensity = 0.55 + Math.sin(now * 2.6 + 1.4) * 0.07;
   }
 }
 
