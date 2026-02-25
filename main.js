@@ -61,7 +61,6 @@ const state = {
     lid: null,
     name: null,
     avatar: null,
-    logo: null,
   },
 
   lidClosedQuat: null,
@@ -83,13 +82,9 @@ const state = {
     lid: null,
     name: null,
     avatar: null,
-    logo: null,
   },
   avatarImgEl: null,
   avatarImgLoaded: false,
-  brandLogoImgEl: null,
-  brandLogoLoaded: false,
-  brandLogoLoadStarted: false,
   lastScreenFxDraw: 0,
 
   // message letter prop (flies into capsule during sealing)
@@ -1059,11 +1054,6 @@ loader.load(
     state.screens.lid = gltf.scene.getObjectByName('screen_lid');
     state.screens.name = gltf.scene.getObjectByName('screen_name');
     state.screens.avatar = gltf.scene.getObjectByName('screen_avatar');
-    state.screens.logo = gltf.scene.getObjectByName('screen_logo');
-
-    if (!state.screens.logo) {
-      console.info('[screens] screen_logo not found (optional mesh)');
-    }
 
     // Lid pose setup
     if (state.lidBone || state.lidControl) {
@@ -1268,140 +1258,30 @@ function easeOutCubic(t) {
   return 1 - Math.pow(1 - x, 3);
 }
 
-const SCREEN_UV_TUNE = {
-  // ─────────────────────────────────────────────────────────────────────────
-  // UV tuning for time_capsule_case_v2.glb
-  //
-  // tex.center = (0.5, 0.5) → rotation pivots around UV centre.
-  // rotation > 0  = CCW in UV space (appears CW on screen in glTF Y-up).
-  // repeatX/Y > 1 → zoom out (show more of the canvas → content appears smaller).
-  // offsetX/Y     → shift texture in UV space (post-repeat).
-  //
-  // FINDINGS from screenshots 06:52–06:55:
-  //   lid    → empty content (bezel visible but text/bar off-screen)
-  //            → try Math.PI/2 (opposite of what name/avatar need)
-  //   name   → content in top-left quadrant after -PI/2 rotation
-  //            → -PI/2 is correct rotation; add offsetY to push content to centre
-  //   avatar → content too large + shifted up-left
-  //            → zoom out with repeatX/Y ~1.35 + centre with offset
-  //   logo   → white strip (footer) showing at top → canvas rotated backwards
-  //            → use Math.PI/2 (flip rotation direction vs name/avatar)
-  // ─────────────────────────────────────────────────────────────────────────
-  default: {
-    rotation: 0,
-    repeatX:  1,
-    repeatY:  1,
-    offsetX:  0,
-    offsetY:  0,
-    flipX:    false,
-    flipY:    false,
-    wrapS:    'clamp',
-    wrapT:    'clamp',
-  },
-
-  // Lid — wide landscape bar on top.
-  // Screenshot: only bezel chrome visible, text/content completely absent.
-  // Trying PI/2 (CCW) with a slight zoom-out to expose the content region.
-  lid: {
-    // FIX (2026-02-25): restore electronic lock UI visibility (content was shifted off-screen).
-    rotation: 0,
-    repeatX:  1.0,
-    repeatY:  1.0,
-    offsetX:  0.0,
-    offsetY:  0.0,
-    flipX:    false,
-    flipY:    false,
-    wrapS:    'clamp',
-    wrapT:    'clamp',
-  },
-
-  // Name — centre rectangular screen.
-  // Screenshot: content rendered in top-left quadrant after -PI/2 rotation.
-  // -PI/2 rotation is correct; need offsetY to shift content to screen centre.
-  // With rotation=-PI/2 + center=0.5,0.5: offset pushes in rotated UV space.
-  name: {
-    // FIX (2026-02-25): neutral orientation so nickname stays horizontal / non-mirrored.
-    rotation: 0,
-    repeatX:   1.0,
-    repeatY:   1.0,
-    offsetX:   0.0,
-    offsetY:   0.0,
-    flipX:     false,
-    flipY:     false,
-    wrapS:     'clamp',
-    wrapT:     'clamp',
-  },
-
-  // Avatar — large square panel (bottom-right front face).
-  // Screenshot: content fills too much + shifted up-left → zoom out + recentre.
-  avatar: {
-    // FIX (2026-02-25): keep full avatar centered with no UV zoom/crop.
-    // Cropping/offset is handled in canvas painter now (contain fit), so UV stays neutral.
-    rotation: 0,
-    repeatX:   1.0,
-    repeatY:   1.0,
-    offsetX:   0.0,
-    offsetY:   0.0,
-    flipX:     false,
-    flipY:     false,
-    wrapS:     'clamp',
-    wrapT:     'clamp',
-  },
-
-  // Logo — small portrait panel (left side).
-  // Screenshot: white strip (footer area) showing → canvas upside-down in UV.
-  // Flipping to Math.PI/2 should invert the orientation.
-  logo: {
-    // FIX (2026-02-25): neutral orientation so MB logo card is centered and not clipped.
-    rotation: 0,
-    repeatX:   1.0,
-    repeatY:   1.0,
-    offsetX:   0.0,
-    offsetY:   0.0,
-    flipX:     false,
-    flipY:     false,
-    wrapS:     'clamp',
-    wrapT:     'clamp',
-  },
-};
-
 function applyTextureOrientation(tex, kind = 'default') {
   if (!tex) return tex;
 
-  const cfg = { ...(SCREEN_UV_TUNE.default || {}), ...(SCREEN_UV_TUNE[kind] || {}) };
-
-  // CanvasTexture used on glTF meshes should match glTF UV convention.
+  // IMPORTANT: canvases applied to GLTF meshes must use flipY=false (same as glTF textures),
+  // otherwise text/icons appear upside-down on screen_* meshes.
   tex.flipY = false;
 
-  let repeatX = Number.isFinite(cfg.repeatX) ? cfg.repeatX : 1;
-  let repeatY = Number.isFinite(cfg.repeatY) ? cfg.repeatY : 1;
-  let offsetX = Number.isFinite(cfg.offsetX) ? cfg.offsetX : 0;
-  let offsetY = Number.isFinite(cfg.offsetY) ? cfg.offsetY : 0;
-
-  if (cfg.flipX) {
-    repeatX *= -1;
-    offsetX = 1 - offsetX;
-  }
-  if (cfg.flipY) {
-    repeatY *= -1;
-    offsetY = 1 - offsetY;
-  }
-
-  const wrapFrom = (v, needsRepeat) => {
-    if (v === 'repeat' || needsRepeat) return THREE.RepeatWrapping;
-    if (v === 'mirror' || v === 'mirrored') return THREE.MirroredRepeatWrapping;
-    return THREE.ClampToEdgeWrapping;
-  };
-
-  const needsRepeatS = repeatX < 0 || offsetX < 0 || offsetX > 0 || Math.abs(repeatX) !== 1;
-  const needsRepeatT = repeatY < 0 || offsetY < 0 || offsetY > 0 || Math.abs(repeatY) !== 1;
-
   tex.center.set(0.5, 0.5);
-  tex.rotation = Number.isFinite(cfg.rotation) ? cfg.rotation : 0;
-  tex.wrapS = wrapFrom(cfg.wrapS, needsRepeatS);
-  tex.wrapT = wrapFrom(cfg.wrapT, needsRepeatT);
-  tex.repeat.set(repeatX, repeatY);
-  tex.offset.set(offsetX, offsetY);
+  tex.rotation = -Math.PI / 2; // GLB screens in this model are UV-rotated 90deg
+  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.repeat.set(1, 1);
+  tex.offset.set(0, 0);
+
+  // Lid screen UV in this GLB is mirrored relative to side screens.
+  // IMPORTANT: negative repeat requires RepeatWrapping (with Clamp it can sample edge color -> blank screen on some GPUs).
+  if (kind === 'lid') {
+    // Lid screen UV is opposite to the side screens in this GLB.
+    // Use +90deg (instead of the shared -90deg) + Y mirror to keep the lid display upright.
+    tex.rotation = Math.PI / 2;
+    tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.y = -1;
+    tex.offset.y = 1;
+  }
 
   tex.needsUpdate = true;
   return tex;
@@ -1426,14 +1306,13 @@ function makeCanvasPack(width, height, painter) {
 function createScreenMaterial(tex, emissiveHex = 0x0a1320, emissiveIntensity = 0.55) {
   return new THREE.MeshPhysicalMaterial({
     map: tex,
-    emissiveMap: tex,          // canvas texture also drives emission → screen glows
     transparent: true,
     opacity: 1,
     metalness: 0.06,
     roughness: 0.28,
     clearcoat: 0.75,
     clearcoatRoughness: 0.22,
-    emissive: new THREE.Color(0xffffff), // white so emissiveMap colours aren't tinted
+    emissive: new THREE.Color(emissiveHex),
     emissiveIntensity,
   });
 }
@@ -1740,8 +1619,11 @@ function drawLockGlyph(ctx, x, y, size, progressClosed) {
 }
 
 function drawLidScreenCanvas(ctx, w, h, time) {
-  // NOTE: UV orientation is handled by SCREEN_UV_TUNE.lid — no manual canvas flip needed.
+  // LID SCREEN FIX: current lid UVs display text mirrored horizontally,
+  // so we pre-flip the canvas once here to make the final screen readable.
   ctx.save();
+  ctx.translate(w, 0);
+  ctx.scale(-1, 1);
 
   drawScreenGlassBg(ctx, w, h, {
     radius: 44,
@@ -1885,9 +1767,9 @@ function drawNameScreenCanvas(ctx, w, h, time) {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
-  let size = 84;
-  if (nick.length > 12) size = 68;
-  if (nick.length > 18) size = 54;
+  let size = 92;
+  if (nick.length > 14) size = 72;
+  if (nick.length > 18) size = 58;
 
   const pulse = 0.92 + Math.sin(time * 3.8) * 0.04;
   const nameGrad = ctx.createLinearGradient(0, 0, w, 0);
@@ -1938,7 +1820,7 @@ function drawAvatarScreenCanvas(ctx, w, h, time) {
   drawUiPill(ctx, w * 0.72, h * 0.05, w * 0.08, 24, 'A', { active: true, font: '700 11px Inter, sans-serif' });
   drawUiPill(ctx, w * 0.82, h * 0.05, w * 0.10, 24, 'REC', { active: !!state.avatarImgLoaded, font: '700 11px Inter, sans-serif' });
 
-  const pad = Math.round(Math.min(w, h) * 0.0625);
+  const pad = 48;
   const innerX = pad;
   const innerY = pad;
   const innerW = w - pad * 2;
@@ -1956,22 +1838,13 @@ function drawAvatarScreenCanvas(ctx, w, h, time) {
 
   const img = state.avatarImgEl;
   if (img && state.avatarImgLoaded) {
-    // FIX (2026-02-25): use CONTAIN fit (not cover) so avatar is centered and never cropped.
-    const iw = img.naturalWidth || img.width || 1;
-    const ih = img.naturalHeight || img.height || 1;
-    const scale = Math.min(innerW / iw, innerH / ih);
-    const dw = iw * scale;
-    const dh = ih * scale;
-    const dx = innerX + (innerW - dw) / 2;
-    const dy = innerY + (innerH - dh) / 2;
-
-    // subtle panel glow behind avatar for empty margins (letterboxing) to look intentional
-    const g = ctx.createRadialGradient(w * 0.5, h * 0.52, 0, w * 0.5, h * 0.52, Math.max(innerW, innerH) * 0.6);
-    g.addColorStop(0, 'rgba(38,66,120,0.20)');
-    g.addColorStop(1, 'rgba(8,14,26,0.00)');
-    ctx.fillStyle = g;
-    ctx.fillRect(innerX, innerY, innerW, innerH);
-
+    const floatX = Math.sin(time * 1.6) * 7;
+    const floatY = Math.cos(time * 1.9) * 6;
+    const scale = Math.max(innerW / img.width, innerH / img.height) * (1.03 + Math.sin(time * 1.4) * 0.01);
+    const dw = img.width * scale;
+    const dh = img.height * scale;
+    const dx = innerX + (innerW - dw) / 2 + floatX;
+    const dy = innerY + (innerH - dh) / 2 + floatY;
     ctx.drawImage(img, dx, dy, dw, dh);
   } else {
     const ph = ctx.createLinearGradient(innerX, innerY, innerX + innerW, innerY + innerH);
@@ -2021,255 +1894,8 @@ function drawAvatarScreenCanvas(ctx, w, h, time) {
   drawUiPill(ctx, w * 0.72, dockY, w * 0.18, 22, 'SYNC OK', { active: state.avatarImgLoaded, font: '700 10px Inter, sans-serif' });
 }
 
-
-function drawLogoScreenCanvas(ctx, w, h, time) {
-  // ── Force-clear + solid bg first (prevents transparent/white bleed) ───────
-  ctx.clearRect(0, 0, w, h);
-
-  // Solid dark fill across the entire canvas (no clipping yet)
-  ctx.fillStyle = 'rgb(4, 8, 18)';
-  ctx.fillRect(0, 0, w, h);
-
-  // ── Deep space background (radial gradient over solid) ────────────────────
-  const bg = ctx.createRadialGradient(w * 0.5, h * 0.38, 0, w * 0.5, h * 0.5, Math.max(w, h) * 0.75);
-  bg.addColorStop(0,   'rgba(14, 26, 52, 1)');
-  bg.addColorStop(0.5, 'rgba(7, 13, 28, 1)');
-  bg.addColorStop(1,   'rgba(3, 6, 14, 1)');
-  ctx.fillStyle = bg;
-  ctx.fillRect(0, 0, w, h);
-
-  // Round-clip everything that follows to the screen boundary
-  ctx.save();
-  ctx.beginPath();
-  roundRect(ctx, 1, 1, w - 2, h - 2, 24);
-  ctx.clip();
-
-  // ── Star field ────────────────────────────────────────────────────────────
-  let rng = 137;
-  const rand = () => { rng = (rng * 1664525 + 1013904223) >>> 0; return rng / 0xffffffff; };
-  for (let i = 0; i < 60; i++) {
-    const sx = rand() * w;
-    const sy = rand() * h;
-    const sr = 0.4 + rand() * 1.3;
-    const sp = rand() * Math.PI * 2;
-    const alpha = 0.25 + 0.55 * Math.abs(Math.sin(time * (0.5 + rand() * 0.5) + sp));
-    ctx.beginPath();
-    ctx.arc(sx, sy, sr, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(200, 225, 255, ${alpha.toFixed(3)})`;
-    ctx.fill();
-  }
-
-  // ── Nebula glow ───────────────────────────────────────────────────────────
-  const nX = w * 0.5, nY = h * 0.40;
-  const ng = ctx.createRadialGradient(nX, nY, 0, nX, nY, w * 0.65);
-  const na = (0.10 + 0.04 * Math.sin(time * 0.85)).toFixed(3);
-  ng.addColorStop(0,   `rgba(70, 140, 255, ${na})`);
-  ng.addColorStop(0.5, `rgba(100, 60, 200, ${(na * 0.55).toFixed(3)})`);
-  ng.addColorStop(1,   'rgba(0, 0, 0, 0)');
-  ctx.fillStyle = ng;
-  ctx.fillRect(0, 0, w, h);
-
-  // ── Bezel border ─────────────────────────────────────────────────────────
-  ctx.shadowColor = 'rgba(80, 180, 255, 0.35)';
-  ctx.shadowBlur = 14;
-  ctx.strokeStyle = 'rgba(70, 160, 255, 0.55)';
-  ctx.lineWidth = 2.5;
-  ctx.beginPath(); roundRect(ctx, 2, 2, w - 4, h - 4, 23); ctx.stroke();
-  ctx.shadowBlur = 0;
-  ctx.strokeStyle = 'rgba(50, 100, 200, 0.28)';
-  ctx.lineWidth = 1;
-  ctx.beginPath(); roundRect(ctx, 7, 7, w - 14, h - 14, 19); ctx.stroke();
-
-  // ── Header bar ────────────────────────────────────────────────────────────
-  const hdrH = 34;
-  const hg = ctx.createLinearGradient(0, 0, w, 0);
-  hg.addColorStop(0,   'rgba(18, 34, 66, 0.96)');
-  hg.addColorStop(0.5, 'rgba(12, 24, 50, 0.94)');
-  hg.addColorStop(1,   'rgba(18, 34, 66, 0.96)');
-  ctx.fillStyle = hg;
-  ctx.fillRect(0, 0, w, hdrH);
-  ctx.strokeStyle = 'rgba(70, 150, 255, 0.28)';
-  ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(0, hdrH); ctx.lineTo(w, hdrH); ctx.stroke();
-
-  ctx.font = 'bold 9px Inter, monospace';
-  ctx.fillStyle = 'rgba(120, 205, 255, 0.92)';
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'middle';
-  ctx.fillText('MB NODE', 13, hdrH / 2);
-
-  // Blinking online dot
-  const dotA = (0.6 + 0.4 * Math.abs(Math.sin(time * 2.3))).toFixed(3);
-  ctx.beginPath();
-  ctx.arc(w - 28, hdrH / 2, 4, 0, Math.PI * 2);
-  ctx.fillStyle = `rgba(0, 255, 170, ${dotA})`;
-  ctx.fill();
-  ctx.font = '600 8px Inter, monospace';
-  ctx.fillStyle = 'rgba(0, 245, 165, 0.82)';
-  ctx.textAlign = 'right';
-  ctx.fillText('ON', w - 12, hdrH / 2);
-
-  // ── Main content area ─────────────────────────────────────────────────────
-  const pad  = 12;
-  const cY   = hdrH + 8;
-  const cW   = w - pad * 2;
-  const cH   = h - cY - 46;
-  const cx   = pad + cW / 2;
-  const cy   = cY + cH / 2;
-
-  // Inner panel bg
-  const pg = ctx.createLinearGradient(pad, cY, pad + cW, cY + cH);
-  pg.addColorStop(0, 'rgba(16, 30, 58, 0.75)');
-  pg.addColorStop(1, 'rgba(8,  16, 36, 0.70)');
-  ctx.fillStyle = pg;
-  ctx.beginPath(); roundRect(ctx, pad, cY, cW, cH, 14); ctx.fill();
-  ctx.strokeStyle = 'rgba(70, 140, 255, 0.22)';
-  ctx.lineWidth = 1;
-  ctx.beginPath(); roundRect(ctx, pad, cY, cW, cH, 14); ctx.stroke();
-
-  // ── Orbit rings ───────────────────────────────────────────────────────────
-  ctx.save();
-  ctx.beginPath(); roundRect(ctx, pad + 2, cY + 2, cW - 4, cH - 4, 12); ctx.clip();
-
-  const r1 = Math.min(cW, cH) * 0.28;
-  const r2 = r1 * 1.48;
-  const r3 = r2 * 1.28;
-
-  const arc = (r, angle, alpha, ca, cb) => {
-    ctx.save(); ctx.translate(cx, cy); ctx.rotate(angle);
-    ctx.lineWidth = 1.5;
-    ctx.strokeStyle = ca.replace('{a}', alpha.toFixed(3));
-    ctx.beginPath(); ctx.arc(0, 0, r, 0.3, 1.9); ctx.stroke();
-    ctx.strokeStyle = cb.replace('{a}', (alpha * 0.65).toFixed(3));
-    ctx.beginPath(); ctx.arc(0, 0, r, 2.5, 4.2); ctx.stroke();
-    ctx.restore();
-  };
-
-  arc(r3,  time * 0.20, 0.10, 'rgba(70,130,255,{a})',  'rgba(130,70,230,{a})');
-  arc(r2,  time * 0.52, 0.22, 'rgba(90,195,255,{a})',  'rgba(110,110,255,{a})');
-  arc(r1, -time * 0.37, 0.18, 'rgba(0, 215,195,{a})',  'rgba(70,170,255,{a})');
-
-  // Orbit node dots
-  const dot = (r, baseA, rotA, col) => {
-    const ax = cx + r * Math.cos(rotA + baseA);
-    const ay = cy + r * Math.sin(rotA + baseA);
-    ctx.beginPath(); ctx.arc(ax, ay, 2.8, 0, Math.PI * 2);
-    ctx.fillStyle = col; ctx.fill();
-  };
-  dot(r2, 0,           time * 0.52, 'rgba(140,220,255,0.92)');
-  dot(r2, Math.PI,     time * 0.52, 'rgba(100,175,255,0.60)');
-  dot(r1, Math.PI / 3,-time * 0.37, 'rgba(0,240,195,0.82)');
-
-  ctx.restore();
-
-  // ── White logo card ───────────────────────────────────────────────────────
-  const lpW = cW * 0.72;
-  const lpH = cH * 0.40;
-  const lpX = cx - lpW / 2;
-  const lpY = cy - lpH / 2 - 8;
-
-  // Glowing shadow behind card
-  ctx.save();
-  ctx.shadowColor = 'rgba(100, 195, 255, 0.60)';
-  ctx.shadowBlur = 22;
-  ctx.fillStyle = 'rgba(255,255,255,0.04)';
-  ctx.beginPath(); roundRect(ctx, lpX - 4, lpY - 4, lpW + 8, lpH + 8, 15); ctx.fill();
-  ctx.shadowBlur = 0;
-
-  // Card face
-  const cg = ctx.createLinearGradient(lpX, lpY, lpX + lpW, lpY + lpH);
-  cg.addColorStop(0,   'rgba(242, 248, 255, 0.97)');
-  cg.addColorStop(0.6, 'rgba(215, 232, 250, 0.95)');
-  cg.addColorStop(1,   'rgba(195, 218, 245, 0.93)');
-  ctx.fillStyle = cg;
-  ctx.beginPath(); roundRect(ctx, lpX, lpY, lpW, lpH, 11); ctx.fill();
-
-  // Card border shine
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.65)';
-  ctx.lineWidth = 1.5;
-  ctx.beginPath(); roundRect(ctx, lpX, lpY, lpW, lpH, 11); ctx.stroke();
-  ctx.restore();
-
-  // Draw MB logo image (black PNG on white card)
-  const logoImg = state.brandLogoImgEl;
-  if (logoImg && state.brandLogoLoaded) {
-    const iw = logoImg.naturalWidth  || logoImg.width  || 1;
-    const ih = logoImg.naturalHeight || logoImg.height || 1;
-    const scale = Math.min((lpW * 0.72) / iw, (lpH * 0.72) / ih);
-    const dw = iw * scale;
-    const dh = ih * scale;
-    ctx.drawImage(logoImg, cx - dw / 2, lpY + (lpH - dh) / 2, dw, dh);
-  } else {
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.font = `900 ${Math.round(Math.min(lpW, lpH) * 0.40)}px Inter, sans-serif`;
-    ctx.fillStyle = 'rgba(8, 16, 36, 0.92)';
-    ctx.fillText('MB', cx, lpY + lpH / 2);
-  }
-
-  // ── Scan sweep ────────────────────────────────────────────────────────────
-  ctx.save();
-  ctx.beginPath(); roundRect(ctx, pad + 2, cY + 2, cW - 4, cH - 4, 12); ctx.clip();
-  const sweepY = cY + (((time * 88) % (cH + 80)) - 40);
-  const sg = ctx.createLinearGradient(0, sweepY - 18, 0, sweepY + 18);
-  sg.addColorStop(0,   'rgba(255,255,255,0)');
-  sg.addColorStop(0.5, 'rgba(130,225,255,0.09)');
-  sg.addColorStop(1,   'rgba(255,255,255,0)');
-  ctx.fillStyle = sg;
-  ctx.fillRect(pad, cY, cW, cH);
-  ctx.restore();
-
-  // ── Label + data tickers ─────────────────────────────────────────────────
-  const lblY = lpY + lpH + 9;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'top';
-  ctx.font = '600 7.5px Inter, monospace';
-  ctx.fillStyle = 'rgba(100, 190, 255, 0.72)';
-  ctx.fillText('MAGICBLOCK PROTOCOL', cx, lblY);
-
-  const tick1 = Math.sin(time * 1.3) > 0 ? '▲ 0x4F' : '▼ 0xA2';
-  const tA1 = (0.55 + 0.35 * Math.sin(time * 3.1)).toFixed(3);
-  const tA2 = (0.55 + 0.35 * Math.sin(time * 2.7 + 1)).toFixed(3);
-  ctx.font = '600 7px Inter, monospace';
-  ctx.fillStyle = `rgba(0, 215, 165, ${tA1})`;
-  ctx.fillText(tick1, cx - cW * 0.20, lblY + 13);
-  ctx.fillStyle = `rgba(110, 155, 255, ${tA2})`;
-  ctx.fillText(`T+${Math.floor(time % 10000).toString().padStart(5, '0')}`, cx + cW * 0.20, lblY + 13);
-
-  // ── Footer ────────────────────────────────────────────────────────────────
-  const fY = h - 40;
-  ctx.strokeStyle = 'rgba(70, 140, 255, 0.22)';
-  ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(8, fY); ctx.lineTo(w - 8, fY); ctx.stroke();
-
-  // Sync status dot
-  const syncOK  = state.brandLogoLoaded;
-  const syncA   = (0.62 + 0.38 * Math.abs(Math.sin(time * 2.4))).toFixed(3);
-  ctx.beginPath();
-  ctx.arc(w * 0.20, fY + 14, 4, 0, Math.PI * 2);
-  ctx.fillStyle = syncOK ? `rgba(0,255,170,${syncA})` : `rgba(255,180,0,${syncA})`;
-  ctx.fill();
-  ctx.font = 'bold 8px Inter, monospace';
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'middle';
-  ctx.fillStyle = 'rgba(175, 208, 255, 0.74)';
-  ctx.fillText(syncOK ? 'SYNC OK' : 'LINKING…', w * 0.28, fY + 14);
-
-  // Signal bars
-  for (let i = 0; i < 4; i++) {
-    const bh = 4 + i * 3;
-    const bA = (0.28 + 0.58 * (i / 3) + 0.12 * Math.sin(time * 2 + i)).toFixed(3);
-    ctx.fillStyle = `rgba(75, 195, 255, ${bA})`;
-    ctx.beginPath();
-    roundRect(ctx, w - 28 + i * 7, fY + 28 - bh, 5, bh, 2);
-    ctx.fill();
-  }
-
-  ctx.restore(); // end screen round-clip
-}
-
 function renderDynamicScreens(force = false) {
-  const hasAny = state.screens.lid || state.screens.name || state.screens.avatar || state.screens.logo;
+  const hasAny = state.screens.lid || state.screens.name || state.screens.avatar;
   if (!hasAny) return;
 
   const now = performance.now() * 0.001;
@@ -2277,23 +1903,23 @@ function renderDynamicScreens(force = false) {
   state.lastScreenFxDraw = now;
 
   if (state.screens.lid?.isMesh) {
-    const pack = ensureScreenFxPack('lid', 1024, 384);
+    const pack = ensureScreenFxPack('lid', 1024, 512);
     drawLidScreenCanvas(pack.ctx, pack.width, pack.height, now);
     pack.tex.needsUpdate = true;
     if (!(state.screens.lid.material && state.screens.lid.material.map === pack.tex)) {
-      state.screens.lid.material = createScreenMaterial(pack.tex, 0x071a19, 0.72);
+      state.screens.lid.material = createScreenMaterial(pack.tex, 0x071a19, 0.75);
     }
-    state.screens.lid.material.emissiveIntensity = state.sealed ? 0.85 : 0.70;
+    state.screens.lid.material.emissiveIntensity = state.sealed ? 0.9 : 0.72;
   }
 
   if (state.screens.name?.isMesh) {
-    const pack = ensureScreenFxPack('name', 768, 768);
+    const pack = ensureScreenFxPack('name', 1024, 384);
     drawNameScreenCanvas(pack.ctx, pack.width, pack.height, now);
     pack.tex.needsUpdate = true;
     if (!(state.screens.name.material && state.screens.name.material.map === pack.tex)) {
-      state.screens.name.material = createScreenMaterial(pack.tex, 0x0a1220, 0.68);
+      state.screens.name.material = createScreenMaterial(pack.tex, 0x0a1220, 0.65);
     }
-    state.screens.name.material.emissiveIntensity = 0.66 + Math.sin(now * 3.7) * 0.05;
+    state.screens.name.material.emissiveIntensity = 0.58 + Math.sin(now * 3.7) * 0.06;
   }
 
   if (state.screens.avatar?.isMesh) {
@@ -2301,19 +1927,9 @@ function renderDynamicScreens(force = false) {
     drawAvatarScreenCanvas(pack.ctx, pack.width, pack.height, now);
     pack.tex.needsUpdate = true;
     if (!(state.screens.avatar.material && state.screens.avatar.material.map === pack.tex)) {
-      state.screens.avatar.material = createScreenMaterial(pack.tex, 0x091523, 0.65);
+      state.screens.avatar.material = createScreenMaterial(pack.tex, 0x091523, 0.62);
     }
-    state.screens.avatar.material.emissiveIntensity = 0.63 + Math.sin(now * 3.1 + 0.8) * 0.05;
-  }
-
-  if (state.screens.logo?.isMesh) {
-    const pack = ensureScreenFxPack('logo', 512, 768);
-    drawLogoScreenCanvas(pack.ctx, pack.width, pack.height, now);
-    pack.tex.needsUpdate = true;
-    if (!(state.screens.logo.material && state.screens.logo.material.map === pack.tex)) {
-      state.screens.logo.material = createScreenMaterial(pack.tex, 0x081523, 0.68);
-    }
-    state.screens.logo.material.emissiveIntensity = 0.66 + Math.sin(now * 2.6 + 1.4) * 0.06;
+    state.screens.avatar.material.emissiveIntensity = 0.55 + Math.sin(now * 3.1 + 0.8) * 0.05;
   }
 }
 
@@ -2334,49 +1950,6 @@ function prepareAvatarImageForScreens() {
     state.avatarImgLoaded = false;
   };
   img.src = state.avatarDataUrl;
-}
-
-function prepareBrandLogoForScreens() {
-  if (state.brandLogoLoaded || state.brandLogoLoadStarted) return;
-
-  // If the header logo image is already in DOM, use it immediately as a fallback source.
-  const domLogo = document.querySelector('.brand-logo img');
-  if (domLogo && domLogo.complete && (domLogo.naturalWidth || domLogo.width)) {
-    state.brandLogoImgEl = domLogo;
-    state.brandLogoLoaded = true;
-    renderDynamicScreens(true);
-    return;
-  }
-
-  state.brandLogoLoadStarted = true;
-
-  const candidates = [
-    './assets/MagicBlock-Logomark-Black.png',
-    './MagicBlock-Logomark-Black.png',
-    './assets/magicblock_logo_time_capsule_with_text_BIG_transparent.png',
-  ];
-
-  const tryLoad = (index) => {
-    if (index >= candidates.length) {
-      state.brandLogoLoadStarted = false;
-      state.brandLogoLoaded = false;
-      console.warn('[screen_logo] brand logo image not found. Using fallback MB text.');
-      renderDynamicScreens(true);
-      return;
-    }
-
-    const img = new Image();
-    img.onload = () => {
-      state.brandLogoImgEl = img;
-      state.brandLogoLoaded = true;
-      state.brandLogoLoadStarted = false;
-      renderDynamicScreens(true);
-    };
-    img.onerror = () => tryLoad(index + 1);
-    img.src = candidates[index];
-  };
-
-  tryLoad(0);
 }
 
 function makeEdgeGlowForMesh(mesh) {
@@ -2530,11 +2103,8 @@ function setupScreenPlaceholders() {
   if (state.screens.avatar?.isMesh) {
     state.screens.avatar.material = placeholderMaterial('AVATAR');
   }
-  if (state.screens.logo?.isMesh) {
-    state.screens.logo.material = placeholderMaterial('LOGO');
-  }
 
-  ['lid','name','avatar','logo'].forEach((k) => {
+  ['lid','name','avatar'].forEach((k) => {
     const m = state.screens[k]?.material;
     if (m?.map) applyTextureOrientation(m.map, k);
   });
@@ -2543,9 +2113,6 @@ function setupScreenPlaceholders() {
 function updateDynamicTextures() {
   if (state.avatarDataUrl && (!state.avatarImgEl || !state.avatarImgLoaded)) {
     prepareAvatarImageForScreens();
-  }
-  if (!state.brandLogoLoaded && !state.brandLogoLoadStarted) {
-    prepareBrandLogoForScreens();
   }
   renderDynamicScreens(true);
 }
@@ -2891,7 +2458,6 @@ ui.messageInput.addEventListener('input', () => {
 });
 
 updateAvatarFileNameLabel();
-prepareBrandLogoForScreens();
 applyPersistedCapsuleState(loadPersistedCapsuleState());
 validateIntroForm();
 updateSealButtonState();
@@ -3049,13 +2615,10 @@ function tick() {
   const tNow = clock.elapsedTime;
   if (!state.sealAnimPlaying && !state.sealed) {
     if (state.screens.name?.material) {
-      state.screens.name.material.emissiveIntensity = 0.66 + Math.sin(tNow * 2.8) * 0.05;
+      state.screens.name.material.emissiveIntensity = 0.58 + Math.sin(tNow * 2.8) * 0.05;
     }
     if (state.screens.avatar?.material) {
-      state.screens.avatar.material.emissiveIntensity = 0.63 + Math.sin(tNow * 2.3 + 0.7) * 0.05;
-    }
-    if (state.screens.logo?.material) {
-      state.screens.logo.material.emissiveIntensity = 0.66 + Math.sin(tNow * 2.1 + 1.2) * 0.06;
+      state.screens.avatar.material.emissiveIntensity = 0.56 + Math.sin(tNow * 2.3 + 0.7) * 0.05;
     }
   }
 
