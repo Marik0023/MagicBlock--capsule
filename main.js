@@ -1808,9 +1808,9 @@ function drawAvatarScreenCanvas(ctx, w, h, time) {
 
   const img = state.avatarImgEl;
   if (img && state.avatarImgLoaded) {
-    const floatX = Math.sin(time * 1.6) * 7;
-    const floatY = Math.cos(time * 1.9) * 6;
-    const scale = Math.max(innerW / img.width, innerH / img.height) * (1.03 + Math.sin(time * 1.4) * 0.01);
+    const floatX = 0;
+    const floatY = 0;
+    const scale = Math.min(innerW / img.width, innerH / img.height);
     const dw = img.width * scale;
     const dh = img.height * scale;
     const dx = innerX + (innerW - dw) / 2 + floatX;
