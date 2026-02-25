@@ -1270,87 +1270,93 @@ function easeOutCubic(t) {
 
 const SCREEN_UV_TUNE = {
   // ─────────────────────────────────────────────────────────────────────────
-  // UV tuning for time_capsule_case_v2.glb (redesigned model).
+  // UV tuning for time_capsule_case_v2.glb
   //
-  // HOW TO READ THIS:
-  //   rotation  – canvas rotation applied to the Three.js texture.
-  //               +Math.PI/2 = 90° CCW,  -Math.PI/2 = 90° CW,  0 = upright.
-  //   repeatX/Y – texture repeat (use >1 to zoom out, <1 to zoom in).
-  //   offsetX/Y – shift the texture (0..1 range, post-repeat).
-  //   flipX/Y   – mirror the texture on that axis.
+  // tex.center = (0.5, 0.5) → rotation pivots around UV centre.
+  // rotation > 0  = CCW in UV space (appears CW on screen in glTF Y-up).
+  // repeatX/Y > 1 → zoom out (show more of the canvas → content appears smaller).
+  // offsetX/Y     → shift texture in UV space (post-repeat).
   //
-  // VISUAL DIAGNOSIS (from screenshot 2026-02-25_06:40):
-  //   lid    → content is upright but very dark/small → keep rotation:0, boost emissive
-  //   name   → text rotated 90° CW on screen         → rotation: -Math.PI/2 to correct
-  //   avatar → MB mark rotated 90° CW on screen      → rotation: -Math.PI/2 to correct
-  //   logo   → white box, no background visible       → canvas bg fix (not UV issue)
+  // FINDINGS from screenshots 06:52–06:55:
+  //   lid    → empty content (bezel visible but text/bar off-screen)
+  //            → try Math.PI/2 (opposite of what name/avatar need)
+  //   name   → content in top-left quadrant after -PI/2 rotation
+  //            → -PI/2 is correct rotation; add offsetY to push content to centre
+  //   avatar → content too large + shifted up-left
+  //            → zoom out with repeatX/Y ~1.35 + centre with offset
+  //   logo   → white strip (footer) showing at top → canvas rotated backwards
+  //            → use Math.PI/2 (flip rotation direction vs name/avatar)
   // ─────────────────────────────────────────────────────────────────────────
   default: {
     rotation: 0,
-    repeatX: 1,
-    repeatY: 1,
-    offsetX: 0,
-    offsetY: 0,
-    flipX: false,
-    flipY: false,
-    wrapS: 'clamp',
-    wrapT: 'clamp',
+    repeatX:  1,
+    repeatY:  1,
+    offsetX:  0,
+    offsetY:  0,
+    flipX:    false,
+    flipY:    false,
+    wrapS:    'clamp',
+    wrapT:    'clamp',
   },
 
-  // Lid screen — wide landscape bar on top of the capsule.
-  // Content appears upright but very dim in the new model; no rotation fix needed.
+  // Lid — wide landscape bar on top.
+  // Screenshot: only bezel chrome visible, text/content completely absent.
+  // Trying PI/2 (CCW) with a slight zoom-out to expose the content region.
   lid: {
-    rotation: 0,
-    repeatX: 1.0,
-    repeatY: 1.0,
-    offsetX: 0.0,
-    offsetY: 0.0,
-    flipX: false,
-    flipY: false,
-    wrapS: 'clamp',
-    wrapT: 'clamp',
+    rotation: Math.PI / 2,
+    repeatX:  1.0,
+    repeatY:  1.0,
+    offsetX:  0.0,
+    offsetY:  0.0,
+    flipX:    false,
+    flipY:    false,
+    wrapS:    'clamp',
+    wrapT:    'clamp',
   },
 
-  // Name panel — the centre rectangular screen.
-  // Screenshot shows content rotated 90° CW → apply -Math.PI/2 to straighten.
+  // Name — centre rectangular screen.
+  // Screenshot: content rendered in top-left quadrant after -PI/2 rotation.
+  // -PI/2 rotation is correct; need offsetY to shift content to screen centre.
+  // With rotation=-PI/2 + center=0.5,0.5: offset pushes in rotated UV space.
   name: {
     rotation: -Math.PI / 2,
-    repeatX: 1.0,
-    repeatY: 1.0,
-    offsetX: 0.0,
-    offsetY: 0.0,
-    flipX: false,
-    flipY: false,
-    wrapS: 'clamp',
-    wrapT: 'clamp',
+    repeatX:   1.0,
+    repeatY:   1.0,
+    offsetX:   0.0,
+    offsetY:   0.0,
+    flipX:     false,
+    flipY:     false,
+    wrapS:     'clamp',
+    wrapT:     'clamp',
   },
 
   // Avatar — large square panel (bottom-right front face).
-  // Screenshot shows content rotated 90° CW → same fix as name.
+  // Screenshot: content fills too much + shifted up-left → zoom out + recentre.
   avatar: {
     rotation: -Math.PI / 2,
-    repeatX: 1.0,
-    repeatY: 1.0,
-    offsetX: 0.0,
-    offsetY: 0.0,
-    flipX: false,
-    flipY: false,
-    wrapS: 'clamp',
-    wrapT: 'clamp',
+    repeatX:   1.35,
+    repeatY:   1.35,
+    offsetX:  -0.175,
+    offsetY:   0.175,
+    flipX:     false,
+    flipY:     false,
+    wrapS:     'repeat',
+    wrapT:     'repeat',
   },
 
-  // Logo — small portrait panel (centre-left front face).
-  // The canvas bg wasn't rendering — UV is likely fine; fixed in draw function.
+  // Logo — small portrait panel (left side).
+  // Screenshot: white strip (footer area) showing → canvas upside-down in UV.
+  // Flipping to Math.PI/2 should invert the orientation.
   logo: {
-    rotation: -Math.PI / 2,
-    repeatX: 1.0,
-    repeatY: 1.0,
-    offsetX: 0.0,
-    offsetY: 0.0,
-    flipX: false,
-    flipY: false,
-    wrapS: 'clamp',
-    wrapT: 'clamp',
+    rotation: Math.PI / 2,
+    repeatX:   1.0,
+    repeatY:   1.0,
+    offsetX:   0.0,
+    offsetY:   0.0,
+    flipX:     false,
+    flipY:     false,
+    wrapS:     'clamp',
+    wrapT:     'clamp',
   },
 };
 
@@ -1415,13 +1421,14 @@ function makeCanvasPack(width, height, painter) {
 function createScreenMaterial(tex, emissiveHex = 0x0a1320, emissiveIntensity = 0.55) {
   return new THREE.MeshPhysicalMaterial({
     map: tex,
+    emissiveMap: tex,          // canvas texture also drives emission → screen glows
     transparent: true,
     opacity: 1,
     metalness: 0.06,
     roughness: 0.28,
     clearcoat: 0.75,
     clearcoatRoughness: 0.22,
-    emissive: new THREE.Color(emissiveHex),
+    emissive: new THREE.Color(0xffffff), // white so emissiveMap colours aren't tinted
     emissiveIntensity,
   });
 }
@@ -2260,9 +2267,9 @@ function renderDynamicScreens(force = false) {
     drawLidScreenCanvas(pack.ctx, pack.width, pack.height, now);
     pack.tex.needsUpdate = true;
     if (!(state.screens.lid.material && state.screens.lid.material.map === pack.tex)) {
-      state.screens.lid.material = createScreenMaterial(pack.tex, 0x071a19, 1.0);
+      state.screens.lid.material = createScreenMaterial(pack.tex, 0x071a19, 0.72);
     }
-    state.screens.lid.material.emissiveIntensity = state.sealed ? 1.2 : 0.95;
+    state.screens.lid.material.emissiveIntensity = state.sealed ? 0.85 : 0.70;
   }
 
   if (state.screens.name?.isMesh) {
@@ -2270,9 +2277,9 @@ function renderDynamicScreens(force = false) {
     drawNameScreenCanvas(pack.ctx, pack.width, pack.height, now);
     pack.tex.needsUpdate = true;
     if (!(state.screens.name.material && state.screens.name.material.map === pack.tex)) {
-      state.screens.name.material = createScreenMaterial(pack.tex, 0x0a1220, 0.90);
+      state.screens.name.material = createScreenMaterial(pack.tex, 0x0a1220, 0.68);
     }
-    state.screens.name.material.emissiveIntensity = 0.88 + Math.sin(now * 3.7) * 0.06;
+    state.screens.name.material.emissiveIntensity = 0.66 + Math.sin(now * 3.7) * 0.05;
   }
 
   if (state.screens.avatar?.isMesh) {
@@ -2280,9 +2287,9 @@ function renderDynamicScreens(force = false) {
     drawAvatarScreenCanvas(pack.ctx, pack.width, pack.height, now);
     pack.tex.needsUpdate = true;
     if (!(state.screens.avatar.material && state.screens.avatar.material.map === pack.tex)) {
-      state.screens.avatar.material = createScreenMaterial(pack.tex, 0x091523, 0.88);
+      state.screens.avatar.material = createScreenMaterial(pack.tex, 0x091523, 0.65);
     }
-    state.screens.avatar.material.emissiveIntensity = 0.85 + Math.sin(now * 3.1 + 0.8) * 0.06;
+    state.screens.avatar.material.emissiveIntensity = 0.63 + Math.sin(now * 3.1 + 0.8) * 0.05;
   }
 
   if (state.screens.logo?.isMesh) {
@@ -2290,9 +2297,9 @@ function renderDynamicScreens(force = false) {
     drawLogoScreenCanvas(pack.ctx, pack.width, pack.height, now);
     pack.tex.needsUpdate = true;
     if (!(state.screens.logo.material && state.screens.logo.material.map === pack.tex)) {
-      state.screens.logo.material = createScreenMaterial(pack.tex, 0x081523, 0.90);
+      state.screens.logo.material = createScreenMaterial(pack.tex, 0x081523, 0.68);
     }
-    state.screens.logo.material.emissiveIntensity = 0.88 + Math.sin(now * 2.6 + 1.4) * 0.07;
+    state.screens.logo.material.emissiveIntensity = 0.66 + Math.sin(now * 2.6 + 1.4) * 0.06;
   }
 }
 
@@ -3028,13 +3035,13 @@ function tick() {
   const tNow = clock.elapsedTime;
   if (!state.sealAnimPlaying && !state.sealed) {
     if (state.screens.name?.material) {
-      state.screens.name.material.emissiveIntensity = 0.88 + Math.sin(tNow * 2.8) * 0.06;
+      state.screens.name.material.emissiveIntensity = 0.66 + Math.sin(tNow * 2.8) * 0.05;
     }
     if (state.screens.avatar?.material) {
-      state.screens.avatar.material.emissiveIntensity = 0.85 + Math.sin(tNow * 2.3 + 0.7) * 0.06;
+      state.screens.avatar.material.emissiveIntensity = 0.63 + Math.sin(tNow * 2.3 + 0.7) * 0.05;
     }
     if (state.screens.logo?.material) {
-      state.screens.logo.material.emissiveIntensity = 0.88 + Math.sin(tNow * 2.1 + 1.2) * 0.07;
+      state.screens.logo.material.emissiveIntensity = 0.66 + Math.sin(tNow * 2.1 + 1.2) * 0.06;
     }
   }
 
