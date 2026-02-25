@@ -61,6 +61,7 @@ const state = {
     lid: null,
     name: null,
     avatar: null,
+    logo: null,
   },
 
   lidClosedQuat: null,
@@ -82,9 +83,13 @@ const state = {
     lid: null,
     name: null,
     avatar: null,
+    logo: null,
   },
   avatarImgEl: null,
   avatarImgLoaded: false,
+  brandLogoImgEl: null,
+  brandLogoLoaded: false,
+  brandLogoLoadStarted: false,
   lastScreenFxDraw: 0,
 
   // message letter prop (flies into capsule during sealing)
@@ -1054,6 +1059,11 @@ loader.load(
     state.screens.lid = gltf.scene.getObjectByName('screen_lid');
     state.screens.name = gltf.scene.getObjectByName('screen_name');
     state.screens.avatar = gltf.scene.getObjectByName('screen_avatar');
+    state.screens.logo = gltf.scene.getObjectByName('screen_logo');
+
+    if (!state.screens.logo) {
+      console.info('[screens] screen_logo not found (optional mesh)');
+    }
 
     // Lid pose setup
     if (state.lidBone || state.lidControl) {
@@ -1258,30 +1268,111 @@ function easeOutCubic(t) {
   return 1 - Math.pow(1 - x, 3);
 }
 
+const SCREEN_UV_TUNE = {
+  // NOTE:
+  // These values compensate for the current GLB UV layout (rotated screens + a few overscanned UVs).
+  // If you tweak the model again and one screen looks shifted, you only need to edit this object.
+  default: {
+    rotation: -Math.PI / 2,
+    repeatX: 1,
+    repeatY: 1,
+    offsetX: 0,
+    offsetY: 0,
+    flipX: false,
+    flipY: false,
+    wrapS: 'clamp',
+    wrapT: 'clamp',
+  },
+
+  // Lid screen uses a mirrored UV orientation and a cropped UV island.
+  lid: {
+    rotation: Math.PI / 2,
+    repeatX: 1.28,
+    repeatY: 1.09,
+    offsetX: -0.28,
+    offsetY: -0.09,
+    flipX: false,
+    flipY: true,
+    wrapS: 'repeat',
+    wrapT: 'repeat',
+  },
+
+  // Name panel UV extends slightly beyond 0..1, so clamp smears edges.
+  name: {
+    rotation: -Math.PI / 2,
+    repeatX: 0.875,
+    repeatY: 0.963,
+    offsetX: 0.056,
+    offsetY: 0.059,
+    flipX: false,
+    flipY: false,
+    wrapS: 'repeat',
+    wrapT: 'repeat',
+  },
+
+  // Avatar / logo panels are nearly full-range UVs but slightly overscanned vertically.
+  avatar: {
+    rotation: -Math.PI / 2,
+    repeatX: 1.0,
+    repeatY: 1.04,
+    offsetX: 0.0,
+    offsetY: -0.04,
+    flipX: false,
+    flipY: false,
+    wrapS: 'repeat',
+    wrapT: 'repeat',
+  },
+
+  logo: {
+    rotation: -Math.PI / 2,
+    repeatX: 1.0,
+    repeatY: 1.04,
+    offsetX: 0.0,
+    offsetY: -0.04,
+    flipX: false,
+    flipY: false,
+    wrapS: 'repeat',
+    wrapT: 'repeat',
+  },
+};
+
 function applyTextureOrientation(tex, kind = 'default') {
   if (!tex) return tex;
 
-  // IMPORTANT: canvases applied to GLTF meshes must use flipY=false (same as glTF textures),
-  // otherwise text/icons appear upside-down on screen_* meshes.
+  const cfg = { ...(SCREEN_UV_TUNE.default || {}), ...(SCREEN_UV_TUNE[kind] || {}) };
+
+  // CanvasTexture used on glTF meshes should match glTF UV convention.
   tex.flipY = false;
 
-  tex.center.set(0.5, 0.5);
-  tex.rotation = -Math.PI / 2; // GLB screens in this model are UV-rotated 90deg
-  tex.wrapS = THREE.ClampToEdgeWrapping;
-  tex.wrapT = THREE.ClampToEdgeWrapping;
-  tex.repeat.set(1, 1);
-  tex.offset.set(0, 0);
+  let repeatX = Number.isFinite(cfg.repeatX) ? cfg.repeatX : 1;
+  let repeatY = Number.isFinite(cfg.repeatY) ? cfg.repeatY : 1;
+  let offsetX = Number.isFinite(cfg.offsetX) ? cfg.offsetX : 0;
+  let offsetY = Number.isFinite(cfg.offsetY) ? cfg.offsetY : 0;
 
-  // Lid screen UV in this GLB is mirrored relative to side screens.
-  // IMPORTANT: negative repeat requires RepeatWrapping (with Clamp it can sample edge color -> blank screen on some GPUs).
-  if (kind === 'lid') {
-    // Lid screen UV is opposite to the side screens in this GLB.
-    // Use +90deg (instead of the shared -90deg) + Y mirror to keep the lid display upright.
-    tex.rotation = Math.PI / 2;
-    tex.wrapT = THREE.RepeatWrapping;
-    tex.repeat.y = -1;
-    tex.offset.y = 1;
+  if (cfg.flipX) {
+    repeatX *= -1;
+    offsetX = 1 - offsetX;
   }
+  if (cfg.flipY) {
+    repeatY *= -1;
+    offsetY = 1 - offsetY;
+  }
+
+  const wrapFrom = (v, needsRepeat) => {
+    if (v === 'repeat' || needsRepeat) return THREE.RepeatWrapping;
+    if (v === 'mirror' || v === 'mirrored') return THREE.MirroredRepeatWrapping;
+    return THREE.ClampToEdgeWrapping;
+  };
+
+  const needsRepeatS = repeatX < 0 || offsetX < 0 || offsetX > 0 || Math.abs(repeatX) !== 1;
+  const needsRepeatT = repeatY < 0 || offsetY < 0 || offsetY > 0 || Math.abs(repeatY) !== 1;
+
+  tex.center.set(0.5, 0.5);
+  tex.rotation = Number.isFinite(cfg.rotation) ? cfg.rotation : 0;
+  tex.wrapS = wrapFrom(cfg.wrapS, needsRepeatS);
+  tex.wrapT = wrapFrom(cfg.wrapT, needsRepeatT);
+  tex.repeat.set(repeatX, repeatY);
+  tex.offset.set(offsetX, offsetY);
 
   tex.needsUpdate = true;
   return tex;
@@ -1767,9 +1858,9 @@ function drawNameScreenCanvas(ctx, w, h, time) {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
-  let size = 92;
-  if (nick.length > 14) size = 72;
-  if (nick.length > 18) size = 58;
+  let size = 84;
+  if (nick.length > 12) size = 68;
+  if (nick.length > 18) size = 54;
 
   const pulse = 0.92 + Math.sin(time * 3.8) * 0.04;
   const nameGrad = ctx.createLinearGradient(0, 0, w, 0);
@@ -1820,7 +1911,7 @@ function drawAvatarScreenCanvas(ctx, w, h, time) {
   drawUiPill(ctx, w * 0.72, h * 0.05, w * 0.08, 24, 'A', { active: true, font: '700 11px Inter, sans-serif' });
   drawUiPill(ctx, w * 0.82, h * 0.05, w * 0.10, 24, 'REC', { active: !!state.avatarImgLoaded, font: '700 11px Inter, sans-serif' });
 
-  const pad = 48;
+  const pad = Math.round(Math.min(w, h) * 0.0625);
   const innerX = pad;
   const innerY = pad;
   const innerW = w - pad * 2;
@@ -1894,8 +1985,150 @@ function drawAvatarScreenCanvas(ctx, w, h, time) {
   drawUiPill(ctx, w * 0.72, dockY, w * 0.18, 22, 'SYNC OK', { active: state.avatarImgLoaded, font: '700 10px Inter, sans-serif' });
 }
 
+
+function drawLogoScreenCanvas(ctx, w, h, time) {
+  drawScreenGlassBg(ctx, w, h, {
+    radius: 32,
+    border: 3,
+    glow: 0.22,
+    accentA: 'rgba(111,228,255,0.30)',
+    accentB: 'rgba(123,134,255,0.22)',
+    inner: 'rgba(8,12,19,0.94)',
+  });
+  drawTabletBezelChrome(ctx, w, h, time, {
+    radius: 32,
+    outerPad: 2,
+    innerPad: 10,
+    leftButtons: 2,
+    rightButtons: 3,
+    topTabs: true,
+    bottomDock: true,
+  });
+
+  drawUiPill(ctx, w * 0.08, h * 0.07, w * 0.34, 20, 'MB NODE', { active: true, align: 'left', font: '700 10px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.66, h * 0.07, w * 0.18, 20, 'RX', { active: true, font: '700 10px Inter, sans-serif' });
+
+  const pad = Math.max(24, Math.round(Math.min(w, h) * 0.12));
+  const innerX = pad;
+  const innerY = Math.round(h * 0.18);
+  const innerW = w - pad * 2;
+  const innerH = h - innerY - pad;
+
+  const panelGrad = ctx.createLinearGradient(innerX, innerY, innerX + innerW, innerY + innerH);
+  panelGrad.addColorStop(0, 'rgba(18,28,42,0.96)');
+  panelGrad.addColorStop(0.65, 'rgba(10,18,30,0.94)');
+  panelGrad.addColorStop(1, 'rgba(8,14,24,0.95)');
+  ctx.fillStyle = panelGrad;
+  roundRect(ctx, innerX, innerY, innerW, innerH, 18);
+  ctx.fill();
+
+  ctx.strokeStyle = 'rgba(149,227,255,0.24)';
+  ctx.lineWidth = 2;
+  roundRect(ctx, innerX, innerY, innerW, innerH, 18);
+  ctx.stroke();
+
+  ctx.save();
+  roundRect(ctx, innerX + 2, innerY + 2, innerW - 4, innerH - 4, 16);
+  ctx.clip();
+
+  // subtle scanlines / grid
+  for (let y = innerY; y < innerY + innerH; y += 6) {
+    ctx.fillStyle = 'rgba(150,215,255,0.02)';
+    ctx.fillRect(innerX, y, innerW, 1);
+  }
+  for (let x = innerX; x < innerX + innerW; x += 14) {
+    ctx.fillStyle = 'rgba(130,190,255,0.02)';
+    ctx.fillRect(x, innerY, 1, innerH);
+  }
+
+  // orbit rings
+  const cx = innerX + innerW * 0.5;
+  const cy = innerY + innerH * 0.55;
+  const r1 = Math.min(innerW, innerH) * 0.28;
+  const r2 = r1 * 1.32;
+  const rotA = time * 0.65;
+  const rotB = -time * 0.45;
+
+  const drawArcRing = (r, a, alpha) => {
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(a);
+    ctx.strokeStyle = `rgba(123,210,255,${alpha})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0.25, 1.65);
+    ctx.stroke();
+    ctx.strokeStyle = `rgba(125,136,255,${alpha * 0.9})`;
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 2.3, 3.75);
+    ctx.stroke();
+    ctx.restore();
+  };
+  drawArcRing(r2, rotA, 0.28);
+  drawArcRing(r1, rotB, 0.22);
+
+  const logoPanelW = innerW * 0.64;
+  const logoPanelH = innerH * 0.54;
+  const logoPanelX = cx - logoPanelW / 2;
+  const logoPanelY = cy - logoPanelH / 2;
+  const lg = ctx.createLinearGradient(logoPanelX, logoPanelY, logoPanelX + logoPanelW, logoPanelY + logoPanelH);
+  lg.addColorStop(0, 'rgba(230,245,255,0.90)');
+  lg.addColorStop(0.55, 'rgba(190,230,255,0.78)');
+  lg.addColorStop(1, 'rgba(165,210,245,0.72)');
+  ctx.fillStyle = lg;
+  roundRect(ctx, logoPanelX, logoPanelY, logoPanelW, logoPanelH, 16);
+  ctx.fill();
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+  ctx.lineWidth = 1.5;
+  roundRect(ctx, logoPanelX, logoPanelY, logoPanelW, logoPanelH, 16);
+  ctx.stroke();
+
+  // draw brand logo (black png preferred), fallback to text mark
+  const logoImg = state.brandLogoImgEl;
+  if (logoImg && state.brandLogoLoaded) {
+    const iw = logoImg.naturalWidth || logoImg.width || 1;
+    const ih = logoImg.naturalHeight || logoImg.height || 1;
+    const scale = Math.min((logoPanelW * 0.78) / iw, (logoPanelH * 0.78) / ih);
+    const dw = iw * scale;
+    const dh = ih * scale;
+    const dx = cx - dw / 2;
+    const dy = cy - dh / 2;
+
+    ctx.save();
+    ctx.shadowColor = 'rgba(90,205,255,0.20)';
+    ctx.shadowBlur = 14;
+    ctx.drawImage(logoImg, dx, dy, dw, dh);
+    ctx.restore();
+  } else {
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = `800 ${Math.round(Math.min(innerW, innerH) * 0.18)}px Inter, sans-serif`;
+    ctx.fillStyle = 'rgba(10,20,35,0.92)';
+    ctx.fillText('MB', cx, cy);
+  }
+
+  // scanning sweep
+  const sweepY = innerY + (((time * 120) % (innerH + 100)) - 50);
+  const sg = ctx.createLinearGradient(0, sweepY - 26, 0, sweepY + 26);
+  sg.addColorStop(0, 'rgba(255,255,255,0)');
+  sg.addColorStop(0.5, 'rgba(140,235,255,0.10)');
+  sg.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = sg;
+  ctx.fillRect(innerX, innerY, innerW, innerH);
+
+  ctx.restore();
+
+  drawUiPill(ctx, w * 0.10, h * 0.84, w * 0.18, 20, 'LINK', { active: true, font: '700 10px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.30, h * 0.84, w * 0.16, 20, 'LOGO', { font: '700 10px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.68, h * 0.84, w * 0.20, 20, state.brandLogoLoaded ? 'SYNC OK' : 'WAIT', {
+    active: state.brandLogoLoaded,
+    font: '700 10px Inter, sans-serif'
+  });
+}
+
 function renderDynamicScreens(force = false) {
-  const hasAny = state.screens.lid || state.screens.name || state.screens.avatar;
+  const hasAny = state.screens.lid || state.screens.name || state.screens.avatar || state.screens.logo;
   if (!hasAny) return;
 
   const now = performance.now() * 0.001;
@@ -1931,6 +2164,16 @@ function renderDynamicScreens(force = false) {
     }
     state.screens.avatar.material.emissiveIntensity = 0.55 + Math.sin(now * 3.1 + 0.8) * 0.05;
   }
+
+  if (state.screens.logo?.isMesh) {
+    const pack = ensureScreenFxPack('logo', 768, 768);
+    drawLogoScreenCanvas(pack.ctx, pack.width, pack.height, now);
+    pack.tex.needsUpdate = true;
+    if (!(state.screens.logo.material && state.screens.logo.material.map === pack.tex)) {
+      state.screens.logo.material = createScreenMaterial(pack.tex, 0x081523, 0.62);
+    }
+    state.screens.logo.material.emissiveIntensity = 0.50 + Math.sin(now * 2.6 + 1.4) * 0.06;
+  }
 }
 
 function prepareAvatarImageForScreens() {
@@ -1950,6 +2193,49 @@ function prepareAvatarImageForScreens() {
     state.avatarImgLoaded = false;
   };
   img.src = state.avatarDataUrl;
+}
+
+function prepareBrandLogoForScreens() {
+  if (state.brandLogoLoaded || state.brandLogoLoadStarted) return;
+
+  // If the header logo image is already in DOM, use it immediately as a fallback source.
+  const domLogo = document.querySelector('.brand-logo img');
+  if (domLogo && domLogo.complete && (domLogo.naturalWidth || domLogo.width)) {
+    state.brandLogoImgEl = domLogo;
+    state.brandLogoLoaded = true;
+    renderDynamicScreens(true);
+    return;
+  }
+
+  state.brandLogoLoadStarted = true;
+
+  const candidates = [
+    './assets/MagicBlock-Logomark-Black.png',
+    './MagicBlock-Logomark-Black.png',
+    './assets/magicblock_logo_time_capsule_with_text_BIG_transparent.png',
+  ];
+
+  const tryLoad = (index) => {
+    if (index >= candidates.length) {
+      state.brandLogoLoadStarted = false;
+      state.brandLogoLoaded = false;
+      console.warn('[screen_logo] brand logo image not found. Using fallback MB text.');
+      renderDynamicScreens(true);
+      return;
+    }
+
+    const img = new Image();
+    img.onload = () => {
+      state.brandLogoImgEl = img;
+      state.brandLogoLoaded = true;
+      state.brandLogoLoadStarted = false;
+      renderDynamicScreens(true);
+    };
+    img.onerror = () => tryLoad(index + 1);
+    img.src = candidates[index];
+  };
+
+  tryLoad(0);
 }
 
 function makeEdgeGlowForMesh(mesh) {
@@ -2103,8 +2389,11 @@ function setupScreenPlaceholders() {
   if (state.screens.avatar?.isMesh) {
     state.screens.avatar.material = placeholderMaterial('AVATAR');
   }
+  if (state.screens.logo?.isMesh) {
+    state.screens.logo.material = placeholderMaterial('LOGO');
+  }
 
-  ['lid','name','avatar'].forEach((k) => {
+  ['lid','name','avatar','logo'].forEach((k) => {
     const m = state.screens[k]?.material;
     if (m?.map) applyTextureOrientation(m.map, k);
   });
@@ -2113,6 +2402,9 @@ function setupScreenPlaceholders() {
 function updateDynamicTextures() {
   if (state.avatarDataUrl && (!state.avatarImgEl || !state.avatarImgLoaded)) {
     prepareAvatarImageForScreens();
+  }
+  if (!state.brandLogoLoaded && !state.brandLogoLoadStarted) {
+    prepareBrandLogoForScreens();
   }
   renderDynamicScreens(true);
 }
@@ -2458,6 +2750,7 @@ ui.messageInput.addEventListener('input', () => {
 });
 
 updateAvatarFileNameLabel();
+prepareBrandLogoForScreens();
 applyPersistedCapsuleState(loadPersistedCapsuleState());
 validateIntroForm();
 updateSealButtonState();
@@ -2619,6 +2912,9 @@ function tick() {
     }
     if (state.screens.avatar?.material) {
       state.screens.avatar.material.emissiveIntensity = 0.56 + Math.sin(tNow * 2.3 + 0.7) * 0.05;
+    }
+    if (state.screens.logo?.material) {
+      state.screens.logo.material.emissiveIntensity = 0.50 + Math.sin(tNow * 2.1 + 1.2) * 0.05;
     }
   }
 
