@@ -1269,11 +1269,22 @@ function easeOutCubic(t) {
 }
 
 const SCREEN_UV_TUNE = {
-  // NOTE:
-  // These values compensate for the current GLB UV layout.
-  // The model was redesigned in v2 — UVs are now axis-aligned (no 90° rotation bake).
-  // rotation: 0 = natural UV orientation for all screens.
-  // Tweak repeatX/Y + offsetX/Y if a screen looks shifted or overscanned.
+  // ─────────────────────────────────────────────────────────────────────────
+  // UV tuning for time_capsule_case_v2.glb (redesigned model).
+  //
+  // HOW TO READ THIS:
+  //   rotation  – canvas rotation applied to the Three.js texture.
+  //               +Math.PI/2 = 90° CCW,  -Math.PI/2 = 90° CW,  0 = upright.
+  //   repeatX/Y – texture repeat (use >1 to zoom out, <1 to zoom in).
+  //   offsetX/Y – shift the texture (0..1 range, post-repeat).
+  //   flipX/Y   – mirror the texture on that axis.
+  //
+  // VISUAL DIAGNOSIS (from screenshot 2026-02-25_06:40):
+  //   lid    → content is upright but very dark/small → keep rotation:0, boost emissive
+  //   name   → text rotated 90° CW on screen         → rotation: -Math.PI/2 to correct
+  //   avatar → MB mark rotated 90° CW on screen      → rotation: -Math.PI/2 to correct
+  //   logo   → white box, no background visible       → canvas bg fix (not UV issue)
+  // ─────────────────────────────────────────────────────────────────────────
   default: {
     rotation: 0,
     repeatX: 1,
@@ -1286,7 +1297,8 @@ const SCREEN_UV_TUNE = {
     wrapT: 'clamp',
   },
 
-  // Lid screen — wide landscape panel on top.
+  // Lid screen — wide landscape bar on top of the capsule.
+  // Content appears upright but very dim in the new model; no rotation fix needed.
   lid: {
     rotation: 0,
     repeatX: 1.0,
@@ -1299,9 +1311,10 @@ const SCREEN_UV_TUNE = {
     wrapT: 'clamp',
   },
 
-  // Name panel — horizontal strip in the center.
+  // Name panel — the centre rectangular screen.
+  // Screenshot shows content rotated 90° CW → apply -Math.PI/2 to straighten.
   name: {
-    rotation: 0,
+    rotation: -Math.PI / 2,
     repeatX: 1.0,
     repeatY: 1.0,
     offsetX: 0.0,
@@ -1312,9 +1325,10 @@ const SCREEN_UV_TUNE = {
     wrapT: 'clamp',
   },
 
-  // Avatar — large square panel (bottom center).
+  // Avatar — large square panel (bottom-right front face).
+  // Screenshot shows content rotated 90° CW → same fix as name.
   avatar: {
-    rotation: 0,
+    rotation: -Math.PI / 2,
     repeatX: 1.0,
     repeatY: 1.0,
     offsetX: 0.0,
@@ -1325,9 +1339,10 @@ const SCREEN_UV_TUNE = {
     wrapT: 'clamp',
   },
 
-  // Logo — small portrait panel on the left side.
+  // Logo — small portrait panel (centre-left front face).
+  // The canvas bg wasn't rendering — UV is likely fine; fixed in draw function.
   logo: {
-    rotation: 0,
+    rotation: -Math.PI / 2,
     repeatX: 1.0,
     repeatY: 1.0,
     offsetX: 0.0,
@@ -1987,269 +2002,249 @@ function drawAvatarScreenCanvas(ctx, w, h, time) {
 
 
 function drawLogoScreenCanvas(ctx, w, h, time) {
-  // Beautiful space-tablet display for screen_logo (small portrait panel on the left).
-  // Features: deep space background, animated nebula glow, star field, orbit rings,
-  // MagicBlock logo prominently centred, animated scan sweep, status HUD.
-
+  // ── Force-clear + solid bg first (prevents transparent/white bleed) ───────
   ctx.clearRect(0, 0, w, h);
 
-  // ── Deep space background ──────────────────────────────────────────────────
-  const bg = ctx.createRadialGradient(w * 0.5, h * 0.42, 0, w * 0.5, h * 0.5, Math.max(w, h) * 0.72);
-  bg.addColorStop(0,   'rgba(10,18,36,1)');
-  bg.addColorStop(0.5, 'rgba(6,12,26,1)');
-  bg.addColorStop(1,   'rgba(3,6,14,1)');
-  ctx.fillStyle = bg;
-  roundRect(ctx, 0, 0, w, h, 28);
-  ctx.fill();
+  // Solid dark fill across the entire canvas (no clipping yet)
+  ctx.fillStyle = 'rgb(4, 8, 18)';
+  ctx.fillRect(0, 0, w, h);
 
-  // Clip everything to screen boundary
+  // ── Deep space background (radial gradient over solid) ────────────────────
+  const bg = ctx.createRadialGradient(w * 0.5, h * 0.38, 0, w * 0.5, h * 0.5, Math.max(w, h) * 0.75);
+  bg.addColorStop(0,   'rgba(14, 26, 52, 1)');
+  bg.addColorStop(0.5, 'rgba(7, 13, 28, 1)');
+  bg.addColorStop(1,   'rgba(3, 6, 14, 1)');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, w, h);
+
+  // Round-clip everything that follows to the screen boundary
   ctx.save();
-  roundRect(ctx, 0, 0, w, h, 28);
+  ctx.beginPath();
+  roundRect(ctx, 1, 1, w - 2, h - 2, 24);
   ctx.clip();
 
   // ── Star field ────────────────────────────────────────────────────────────
-  // Use a seeded pseudo-random for consistent stars
-  const stars = [];
-  let rng = 42;
-  const rand = () => { rng = (rng * 1664525 + 1013904223) & 0xffffffff; return (rng >>> 0) / 0xffffffff; };
-  for (let i = 0; i < 55; i++) {
-    stars.push({ x: rand(), y: rand(), r: 0.5 + rand() * 1.4, p: rand() * Math.PI * 2 });
-  }
-  for (const s of stars) {
-    const alpha = 0.3 + 0.5 * Math.abs(Math.sin(time * (0.6 + s.p * 0.4) + s.p));
+  let rng = 137;
+  const rand = () => { rng = (rng * 1664525 + 1013904223) >>> 0; return rng / 0xffffffff; };
+  for (let i = 0; i < 60; i++) {
+    const sx = rand() * w;
+    const sy = rand() * h;
+    const sr = 0.4 + rand() * 1.3;
+    const sp = rand() * Math.PI * 2;
+    const alpha = 0.25 + 0.55 * Math.abs(Math.sin(time * (0.5 + rand() * 0.5) + sp));
     ctx.beginPath();
-    ctx.arc(s.x * w, s.y * h, s.r, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(200,228,255,${alpha.toFixed(3)})`;
+    ctx.arc(sx, sy, sr, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(200, 225, 255, ${alpha.toFixed(3)})`;
     ctx.fill();
   }
 
   // ── Nebula glow ───────────────────────────────────────────────────────────
-  const nX = w * 0.5, nY = h * 0.43;
-  const ng = ctx.createRadialGradient(nX, nY, 0, nX, nY, w * 0.62);
-  const nebulaAlpha = 0.09 + 0.04 * Math.sin(time * 0.9);
-  ng.addColorStop(0,   `rgba(90,160,255,${nebulaAlpha.toFixed(3)})`);
-  ng.addColorStop(0.5, `rgba(110,80,220,${(nebulaAlpha * 0.6).toFixed(3)})`);
-  ng.addColorStop(1,   'rgba(0,0,0,0)');
+  const nX = w * 0.5, nY = h * 0.40;
+  const ng = ctx.createRadialGradient(nX, nY, 0, nX, nY, w * 0.65);
+  const na = (0.10 + 0.04 * Math.sin(time * 0.85)).toFixed(3);
+  ng.addColorStop(0,   `rgba(70, 140, 255, ${na})`);
+  ng.addColorStop(0.5, `rgba(100, 60, 200, ${(na * 0.55).toFixed(3)})`);
+  ng.addColorStop(1,   'rgba(0, 0, 0, 0)');
   ctx.fillStyle = ng;
   ctx.fillRect(0, 0, w, h);
 
-  // ── Bezel / chrome border ─────────────────────────────────────────────────
-  // Outer edge glow
-  ctx.shadowColor = 'rgba(100,200,255,0.28)';
-  ctx.shadowBlur = 16;
-  ctx.strokeStyle = 'rgba(80,170,255,0.50)';
+  // ── Bezel border ─────────────────────────────────────────────────────────
+  ctx.shadowColor = 'rgba(80, 180, 255, 0.35)';
+  ctx.shadowBlur = 14;
+  ctx.strokeStyle = 'rgba(70, 160, 255, 0.55)';
   ctx.lineWidth = 2.5;
-  roundRect(ctx, 2, 2, w - 4, h - 4, 26);
-  ctx.stroke();
+  ctx.beginPath(); roundRect(ctx, 2, 2, w - 4, h - 4, 23); ctx.stroke();
   ctx.shadowBlur = 0;
-
-  // Inner border
-  ctx.strokeStyle = 'rgba(50,110,200,0.30)';
+  ctx.strokeStyle = 'rgba(50, 100, 200, 0.28)';
   ctx.lineWidth = 1;
-  roundRect(ctx, 8, 8, w - 16, h - 16, 22);
-  ctx.stroke();
+  ctx.beginPath(); roundRect(ctx, 7, 7, w - 14, h - 14, 19); ctx.stroke();
 
   // ── Header bar ────────────────────────────────────────────────────────────
-  const hdrH = 36;
-  const hdrGrad = ctx.createLinearGradient(0, 0, w, 0);
-  hdrGrad.addColorStop(0,   'rgba(20,38,70,0.92)');
-  hdrGrad.addColorStop(0.5, 'rgba(14,28,56,0.88)');
-  hdrGrad.addColorStop(1,   'rgba(20,38,70,0.92)');
-  ctx.fillStyle = hdrGrad;
+  const hdrH = 34;
+  const hg = ctx.createLinearGradient(0, 0, w, 0);
+  hg.addColorStop(0,   'rgba(18, 34, 66, 0.96)');
+  hg.addColorStop(0.5, 'rgba(12, 24, 50, 0.94)');
+  hg.addColorStop(1,   'rgba(18, 34, 66, 0.96)');
+  ctx.fillStyle = hg;
   ctx.fillRect(0, 0, w, hdrH);
-  ctx.strokeStyle = 'rgba(80,170,255,0.25)';
+  ctx.strokeStyle = 'rgba(70, 150, 255, 0.28)';
   ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(0, hdrH); ctx.lineTo(w, hdrH); ctx.stroke();
 
-  // Node label
-  ctx.font = '700 9px Inter, monospace';
-  ctx.fillStyle = 'rgba(130,210,255,0.90)';
+  ctx.font = 'bold 9px Inter, monospace';
+  ctx.fillStyle = 'rgba(120, 205, 255, 0.92)';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
-  ctx.fillText('MB NODE', 14, hdrH / 2);
+  ctx.fillText('MB NODE', 13, hdrH / 2);
 
-  // Status dot
-  const dotAlpha = 0.65 + 0.35 * Math.abs(Math.sin(time * 2.2));
+  // Blinking online dot
+  const dotA = (0.6 + 0.4 * Math.abs(Math.sin(time * 2.3))).toFixed(3);
   ctx.beginPath();
-  ctx.arc(w - 30, hdrH / 2, 4, 0, Math.PI * 2);
-  ctx.fillStyle = `rgba(0,255,180,${dotAlpha.toFixed(3)})`;
+  ctx.arc(w - 28, hdrH / 2, 4, 0, Math.PI * 2);
+  ctx.fillStyle = `rgba(0, 255, 170, ${dotA})`;
   ctx.fill();
   ctx.font = '600 8px Inter, monospace';
-  ctx.fillStyle = 'rgba(0,255,180,0.80)';
+  ctx.fillStyle = 'rgba(0, 245, 165, 0.82)';
   ctx.textAlign = 'right';
-  ctx.fillText('ON', w - 14, hdrH / 2);
+  ctx.fillText('ON', w - 12, hdrH / 2);
 
   // ── Main content area ─────────────────────────────────────────────────────
-  const cPad = 14;
-  const cY = hdrH + 10;
-  const cW = w - cPad * 2;
-  const cH = h - cY - 48; // leave room for footer
-  const cx = cPad + cW / 2;
-  const cy = cY + cH / 2;
+  const pad  = 12;
+  const cY   = hdrH + 8;
+  const cW   = w - pad * 2;
+  const cH   = h - cY - 46;
+  const cx   = pad + cW / 2;
+  const cy   = cY + cH / 2;
 
-  // Subtle inner panel bg
-  const panBg = ctx.createLinearGradient(cPad, cY, cPad + cW, cY + cH);
-  panBg.addColorStop(0,   'rgba(18,32,58,0.72)');
-  panBg.addColorStop(1,   'rgba(10,18,38,0.68)');
-  ctx.fillStyle = panBg;
-  roundRect(ctx, cPad, cY, cW, cH, 16);
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(80,150,255,0.20)';
+  // Inner panel bg
+  const pg = ctx.createLinearGradient(pad, cY, pad + cW, cY + cH);
+  pg.addColorStop(0, 'rgba(16, 30, 58, 0.75)');
+  pg.addColorStop(1, 'rgba(8,  16, 36, 0.70)');
+  ctx.fillStyle = pg;
+  ctx.beginPath(); roundRect(ctx, pad, cY, cW, cH, 14); ctx.fill();
+  ctx.strokeStyle = 'rgba(70, 140, 255, 0.22)';
   ctx.lineWidth = 1;
-  roundRect(ctx, cPad, cY, cW, cH, 16);
-  ctx.stroke();
+  ctx.beginPath(); roundRect(ctx, pad, cY, cW, cH, 14); ctx.stroke();
 
   // ── Orbit rings ───────────────────────────────────────────────────────────
   ctx.save();
-  roundRect(ctx, cPad + 2, cY + 2, cW - 4, cH - 4, 14);
-  ctx.clip();
+  ctx.beginPath(); roundRect(ctx, pad + 2, cY + 2, cW - 4, cH - 4, 12); ctx.clip();
 
-  const r1 = Math.min(cW, cH) * 0.30;
-  const r2 = r1 * 1.45;
-  const r3 = r2 * 1.30;
-  const rotA =  time * 0.55;
-  const rotB = -time * 0.38;
-  const rotC =  time * 0.22;
+  const r1 = Math.min(cW, cH) * 0.28;
+  const r2 = r1 * 1.48;
+  const r3 = r2 * 1.28;
 
-  const drawOrbitArc = (cx2, cy2, r, angle, alpha, colorA, colorB) => {
-    ctx.save();
-    ctx.translate(cx2, cy2);
-    ctx.rotate(angle);
+  const arc = (r, angle, alpha, ca, cb) => {
+    ctx.save(); ctx.translate(cx, cy); ctx.rotate(angle);
     ctx.lineWidth = 1.5;
-    ctx.strokeStyle = colorA.replace('{a}', alpha.toFixed(3));
-    ctx.beginPath(); ctx.arc(0, 0, r, 0.3, 1.8); ctx.stroke();
-    ctx.strokeStyle = colorB.replace('{a}', (alpha * 0.7).toFixed(3));
-    ctx.beginPath(); ctx.arc(0, 0, r, 2.4, 4.1); ctx.stroke();
+    ctx.strokeStyle = ca.replace('{a}', alpha.toFixed(3));
+    ctx.beginPath(); ctx.arc(0, 0, r, 0.3, 1.9); ctx.stroke();
+    ctx.strokeStyle = cb.replace('{a}', (alpha * 0.65).toFixed(3));
+    ctx.beginPath(); ctx.arc(0, 0, r, 2.5, 4.2); ctx.stroke();
     ctx.restore();
   };
 
-  drawOrbitArc(cx, cy, r3, rotC, 0.12, 'rgba(80,140,255,{a})',  'rgba(140,80,255,{a})');
-  drawOrbitArc(cx, cy, r2, rotA, 0.22, 'rgba(100,200,255,{a})', 'rgba(120,120,255,{a})');
-  drawOrbitArc(cx, cy, r1, rotB, 0.18, 'rgba(0,220,200,{a})',   'rgba(80,180,255,{a})');
+  arc(r3,  time * 0.20, 0.10, 'rgba(70,130,255,{a})',  'rgba(130,70,230,{a})');
+  arc(r2,  time * 0.52, 0.22, 'rgba(90,195,255,{a})',  'rgba(110,110,255,{a})');
+  arc(r1, -time * 0.37, 0.18, 'rgba(0, 215,195,{a})',  'rgba(70,170,255,{a})');
 
-  // Orbit dots (nodes)
-  const orbitDot = (r, angle, baseAngle, col) => {
-    const ax = cx + r * Math.cos(baseAngle + angle);
-    const ay = cy + r * Math.sin(baseAngle + angle);
-    ctx.beginPath();
-    ctx.arc(ax, ay, 3, 0, Math.PI * 2);
-    ctx.fillStyle = col;
-    ctx.fill();
+  // Orbit node dots
+  const dot = (r, baseA, rotA, col) => {
+    const ax = cx + r * Math.cos(rotA + baseA);
+    const ay = cy + r * Math.sin(rotA + baseA);
+    ctx.beginPath(); ctx.arc(ax, ay, 2.8, 0, Math.PI * 2);
+    ctx.fillStyle = col; ctx.fill();
   };
-  orbitDot(r2, rotA, 0,           'rgba(140,220,255,0.90)');
-  orbitDot(r2, rotA, Math.PI,     'rgba(100,180,255,0.60)');
-  orbitDot(r1, rotB, Math.PI / 3, 'rgba(0,240,200,0.80)');
+  dot(r2, 0,           time * 0.52, 'rgba(140,220,255,0.92)');
+  dot(r2, Math.PI,     time * 0.52, 'rgba(100,175,255,0.60)');
+  dot(r1, Math.PI / 3,-time * 0.37, 'rgba(0,240,195,0.82)');
 
   ctx.restore();
 
-  // ── Logo panel (white card with MagicBlock logo) ───────────────────────────
-  const lpW = cW * 0.70;
-  const lpH = cH * 0.42;
+  // ── White logo card ───────────────────────────────────────────────────────
+  const lpW = cW * 0.72;
+  const lpH = cH * 0.40;
   const lpX = cx - lpW / 2;
-  const lpY = cy - lpH / 2 - 6;
+  const lpY = cy - lpH / 2 - 8;
 
-  // Card background
-  const cardGrad = ctx.createLinearGradient(lpX, lpY, lpX + lpW, lpY + lpH);
-  cardGrad.addColorStop(0,   'rgba(235,245,255,0.96)');
-  cardGrad.addColorStop(0.6, 'rgba(205,228,250,0.94)');
-  cardGrad.addColorStop(1,   'rgba(185,215,245,0.92)');
-  ctx.fillStyle = cardGrad;
-  roundRect(ctx, lpX, lpY, lpW, lpH, 12);
-  ctx.fill();
-
-  // Card glow
+  // Glowing shadow behind card
   ctx.save();
-  ctx.shadowColor = 'rgba(100,200,255,0.55)';
-  ctx.shadowBlur = 18;
-  ctx.strokeStyle = 'rgba(255,255,255,0.60)';
-  ctx.lineWidth = 1.5;
-  roundRect(ctx, lpX, lpY, lpW, lpH, 12);
-  ctx.stroke();
+  ctx.shadowColor = 'rgba(100, 195, 255, 0.60)';
+  ctx.shadowBlur = 22;
+  ctx.fillStyle = 'rgba(255,255,255,0.04)';
+  ctx.beginPath(); roundRect(ctx, lpX - 4, lpY - 4, lpW + 8, lpH + 8, 15); ctx.fill();
   ctx.shadowBlur = 0;
 
-  // Draw the MB logo image (black PNG on white card)
+  // Card face
+  const cg = ctx.createLinearGradient(lpX, lpY, lpX + lpW, lpY + lpH);
+  cg.addColorStop(0,   'rgba(242, 248, 255, 0.97)');
+  cg.addColorStop(0.6, 'rgba(215, 232, 250, 0.95)');
+  cg.addColorStop(1,   'rgba(195, 218, 245, 0.93)');
+  ctx.fillStyle = cg;
+  ctx.beginPath(); roundRect(ctx, lpX, lpY, lpW, lpH, 11); ctx.fill();
+
+  // Card border shine
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.65)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath(); roundRect(ctx, lpX, lpY, lpW, lpH, 11); ctx.stroke();
+  ctx.restore();
+
+  // Draw MB logo image (black PNG on white card)
   const logoImg = state.brandLogoImgEl;
   if (logoImg && state.brandLogoLoaded) {
     const iw = logoImg.naturalWidth  || logoImg.width  || 1;
     const ih = logoImg.naturalHeight || logoImg.height || 1;
-    const scale = Math.min((lpW * 0.75) / iw, (lpH * 0.75) / ih);
+    const scale = Math.min((lpW * 0.72) / iw, (lpH * 0.72) / ih);
     const dw = iw * scale;
     const dh = ih * scale;
-    const dx = cx - dw / 2;
-    const dy = lpY + (lpH - dh) / 2;
-    ctx.drawImage(logoImg, dx, dy, dw, dh);
+    ctx.drawImage(logoImg, cx - dw / 2, lpY + (lpH - dh) / 2, dw, dh);
   } else {
-    // Fallback: MB monogram
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.font = `900 ${Math.round(Math.min(lpW, lpH) * 0.42)}px Inter, sans-serif`;
-    ctx.fillStyle = 'rgba(10,20,40,0.92)';
+    ctx.font = `900 ${Math.round(Math.min(lpW, lpH) * 0.40)}px Inter, sans-serif`;
+    ctx.fillStyle = 'rgba(8, 16, 36, 0.92)';
     ctx.fillText('MB', cx, lpY + lpH / 2);
   }
-  ctx.restore();
 
-  // ── Scan sweep (cosmetic) ─────────────────────────────────────────────────
+  // ── Scan sweep ────────────────────────────────────────────────────────────
   ctx.save();
-  roundRect(ctx, cPad + 2, cY + 2, cW - 4, cH - 4, 14);
-  ctx.clip();
-  const sweepY = cY + (((time * 90) % (cH + 80)) - 40);
-  const sg = ctx.createLinearGradient(0, sweepY - 20, 0, sweepY + 20);
+  ctx.beginPath(); roundRect(ctx, pad + 2, cY + 2, cW - 4, cH - 4, 12); ctx.clip();
+  const sweepY = cY + (((time * 88) % (cH + 80)) - 40);
+  const sg = ctx.createLinearGradient(0, sweepY - 18, 0, sweepY + 18);
   sg.addColorStop(0,   'rgba(255,255,255,0)');
-  sg.addColorStop(0.5, 'rgba(140,230,255,0.10)');
+  sg.addColorStop(0.5, 'rgba(130,225,255,0.09)');
   sg.addColorStop(1,   'rgba(255,255,255,0)');
   ctx.fillStyle = sg;
-  ctx.fillRect(cPad, cY, cW, cH);
+  ctx.fillRect(pad, cY, cW, cH);
   ctx.restore();
 
-  // ── Data readout label under logo card ────────────────────────────────────
-  const lblY = lpY + lpH + 10;
+  // ── Label + data tickers ─────────────────────────────────────────────────
+  const lblY = lpY + lpH + 9;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
-  ctx.font = '600 8px Inter, monospace';
-  ctx.fillStyle = 'rgba(110,200,255,0.70)';
+  ctx.font = '600 7.5px Inter, monospace';
+  ctx.fillStyle = 'rgba(100, 190, 255, 0.72)';
   ctx.fillText('MAGICBLOCK PROTOCOL', cx, lblY);
 
-  // Tiny data tickers
-  const tickPhase = (time * 0.7) % 1;
-  const tick1 = (Math.sin(time * 1.3) > 0) ? '▲ 0x4F' : '▼ 0xA2';
+  const tick1 = Math.sin(time * 1.3) > 0 ? '▲ 0x4F' : '▼ 0xA2';
+  const tA1 = (0.55 + 0.35 * Math.sin(time * 3.1)).toFixed(3);
+  const tA2 = (0.55 + 0.35 * Math.sin(time * 2.7 + 1)).toFixed(3);
   ctx.font = '600 7px Inter, monospace';
-  ctx.fillStyle = `rgba(0,220,170,${(0.55 + 0.35 * Math.sin(time * 3.1)).toFixed(3)})`;
-  ctx.fillText(tick1, cx - cW * 0.18, lblY + 14);
-  ctx.fillStyle = `rgba(120,160,255,${(0.55 + 0.35 * Math.sin(time * 2.7 + 1)).toFixed(3)})`;
-  ctx.fillText(`T+${Math.floor(time % 1000).toString().padStart(4,'0')}`, cx + cW * 0.18, lblY + 14);
+  ctx.fillStyle = `rgba(0, 215, 165, ${tA1})`;
+  ctx.fillText(tick1, cx - cW * 0.20, lblY + 13);
+  ctx.fillStyle = `rgba(110, 155, 255, ${tA2})`;
+  ctx.fillText(`T+${Math.floor(time % 10000).toString().padStart(5, '0')}`, cx + cW * 0.20, lblY + 13);
 
   // ── Footer ────────────────────────────────────────────────────────────────
-  const fY = h - 38;
-  ctx.strokeStyle = 'rgba(80,150,255,0.20)';
+  const fY = h - 40;
+  ctx.strokeStyle = 'rgba(70, 140, 255, 0.22)';
   ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(0, fY); ctx.lineTo(w, fY); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(8, fY); ctx.lineTo(w - 8, fY); ctx.stroke();
 
-  // Sync indicator
-  const syncActive = state.brandLogoLoaded;
-  const syncGlow = 0.6 + 0.4 * Math.abs(Math.sin(time * 2.5));
+  // Sync status dot
+  const syncOK  = state.brandLogoLoaded;
+  const syncA   = (0.62 + 0.38 * Math.abs(Math.sin(time * 2.4))).toFixed(3);
   ctx.beginPath();
-  ctx.arc(w * 0.22, fY + 14, 4, 0, Math.PI * 2);
-  ctx.fillStyle = syncActive
-    ? `rgba(0,255,180,${syncGlow.toFixed(3)})`
-    : `rgba(255,180,0,${syncGlow.toFixed(3)})`;
+  ctx.arc(w * 0.20, fY + 14, 4, 0, Math.PI * 2);
+  ctx.fillStyle = syncOK ? `rgba(0,255,170,${syncA})` : `rgba(255,180,0,${syncA})`;
   ctx.fill();
-
-  ctx.font = '700 8px Inter, monospace';
+  ctx.font = 'bold 8px Inter, monospace';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
-  ctx.fillStyle = 'rgba(180,210,255,0.72)';
-  ctx.fillText(syncActive ? 'SYNC OK' : 'LINKING', w * 0.30, fY + 14);
+  ctx.fillStyle = 'rgba(175, 208, 255, 0.74)';
+  ctx.fillText(syncOK ? 'SYNC OK' : 'LINKING…', w * 0.28, fY + 14);
 
-  // Signal bars (right side)
+  // Signal bars
   for (let i = 0; i < 4; i++) {
     const bh = 4 + i * 3;
-    const bAlpha = 0.3 + 0.55 * (i / 3) + 0.12 * Math.sin(time * 2 + i);
-    ctx.fillStyle = `rgba(80,200,255,${bAlpha.toFixed(3)})`;
+    const bA = (0.28 + 0.58 * (i / 3) + 0.12 * Math.sin(time * 2 + i)).toFixed(3);
+    ctx.fillStyle = `rgba(75, 195, 255, ${bA})`;
+    ctx.beginPath();
     roundRect(ctx, w - 28 + i * 7, fY + 28 - bh, 5, bh, 2);
     ctx.fill();
   }
 
-  ctx.restore(); // end screen clip
+  ctx.restore(); // end screen round-clip
 }
 
 function renderDynamicScreens(force = false) {
@@ -2265,9 +2260,9 @@ function renderDynamicScreens(force = false) {
     drawLidScreenCanvas(pack.ctx, pack.width, pack.height, now);
     pack.tex.needsUpdate = true;
     if (!(state.screens.lid.material && state.screens.lid.material.map === pack.tex)) {
-      state.screens.lid.material = createScreenMaterial(pack.tex, 0x071a19, 0.75);
+      state.screens.lid.material = createScreenMaterial(pack.tex, 0x071a19, 1.0);
     }
-    state.screens.lid.material.emissiveIntensity = state.sealed ? 0.9 : 0.72;
+    state.screens.lid.material.emissiveIntensity = state.sealed ? 1.2 : 0.95;
   }
 
   if (state.screens.name?.isMesh) {
@@ -2275,9 +2270,9 @@ function renderDynamicScreens(force = false) {
     drawNameScreenCanvas(pack.ctx, pack.width, pack.height, now);
     pack.tex.needsUpdate = true;
     if (!(state.screens.name.material && state.screens.name.material.map === pack.tex)) {
-      state.screens.name.material = createScreenMaterial(pack.tex, 0x0a1220, 0.65);
+      state.screens.name.material = createScreenMaterial(pack.tex, 0x0a1220, 0.90);
     }
-    state.screens.name.material.emissiveIntensity = 0.58 + Math.sin(now * 3.7) * 0.06;
+    state.screens.name.material.emissiveIntensity = 0.88 + Math.sin(now * 3.7) * 0.06;
   }
 
   if (state.screens.avatar?.isMesh) {
@@ -2285,9 +2280,9 @@ function renderDynamicScreens(force = false) {
     drawAvatarScreenCanvas(pack.ctx, pack.width, pack.height, now);
     pack.tex.needsUpdate = true;
     if (!(state.screens.avatar.material && state.screens.avatar.material.map === pack.tex)) {
-      state.screens.avatar.material = createScreenMaterial(pack.tex, 0x091523, 0.62);
+      state.screens.avatar.material = createScreenMaterial(pack.tex, 0x091523, 0.88);
     }
-    state.screens.avatar.material.emissiveIntensity = 0.55 + Math.sin(now * 3.1 + 0.8) * 0.05;
+    state.screens.avatar.material.emissiveIntensity = 0.85 + Math.sin(now * 3.1 + 0.8) * 0.06;
   }
 
   if (state.screens.logo?.isMesh) {
@@ -2295,9 +2290,9 @@ function renderDynamicScreens(force = false) {
     drawLogoScreenCanvas(pack.ctx, pack.width, pack.height, now);
     pack.tex.needsUpdate = true;
     if (!(state.screens.logo.material && state.screens.logo.material.map === pack.tex)) {
-      state.screens.logo.material = createScreenMaterial(pack.tex, 0x081523, 0.68);
+      state.screens.logo.material = createScreenMaterial(pack.tex, 0x081523, 0.90);
     }
-    state.screens.logo.material.emissiveIntensity = 0.55 + Math.sin(now * 2.6 + 1.4) * 0.07;
+    state.screens.logo.material.emissiveIntensity = 0.88 + Math.sin(now * 2.6 + 1.4) * 0.07;
   }
 }
 
@@ -3033,13 +3028,13 @@ function tick() {
   const tNow = clock.elapsedTime;
   if (!state.sealAnimPlaying && !state.sealed) {
     if (state.screens.name?.material) {
-      state.screens.name.material.emissiveIntensity = 0.58 + Math.sin(tNow * 2.8) * 0.05;
+      state.screens.name.material.emissiveIntensity = 0.88 + Math.sin(tNow * 2.8) * 0.06;
     }
     if (state.screens.avatar?.material) {
-      state.screens.avatar.material.emissiveIntensity = 0.56 + Math.sin(tNow * 2.3 + 0.7) * 0.05;
+      state.screens.avatar.material.emissiveIntensity = 0.85 + Math.sin(tNow * 2.3 + 0.7) * 0.06;
     }
     if (state.screens.logo?.material) {
-      state.screens.logo.material.emissiveIntensity = 0.50 + Math.sin(tNow * 2.1 + 1.2) * 0.05;
+      state.screens.logo.material.emissiveIntensity = 0.88 + Math.sin(tNow * 2.1 + 1.2) * 0.07;
     }
   }
 
