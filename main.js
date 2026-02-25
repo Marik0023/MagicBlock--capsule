@@ -1796,43 +1796,13 @@ function drawNameScreenCanvas(ctx, w, h, time) {
 }
 
 function drawAvatarScreenCanvas(ctx, w, h, time) {
-  drawScreenGlassBg(ctx, w, h, {
-    radius: 56,
-    border: 3,
-    glow: 0.2,
-    accentA: 'rgba(111,228,255,0.26)',
-    accentB: 'rgba(123,134,255,0.18)',
-    inner: 'rgba(10,14,22,0.94)',
-  });
-  drawTabletBezelChrome(ctx, w, h, time, {
-    radius: 56,
-    outerPad: 2,
-    innerPad: 14,
-    leftButtons: 5,
-    rightButtons: 5,
-    topTabs: true,
-    bottomDock: true,
-  });
-
-  // Top bar controls / mini buttons
-  drawUiPill(ctx, w * 0.08, h * 0.05, w * 0.18, 24, 'VISOR', { active: true, align: 'left', font: '700 11px Inter, sans-serif' });
-  drawUiPill(ctx, w * 0.28, h * 0.05, w * 0.14, 24, 'CAM', { font: '700 11px Inter, sans-serif' });
-  drawUiPill(ctx, w * 0.72, h * 0.05, w * 0.08, 24, 'A', { active: true, font: '700 11px Inter, sans-serif' });
-  drawUiPill(ctx, w * 0.82, h * 0.05, w * 0.10, 24, 'REC', { active: !!state.avatarImgLoaded, font: '700 11px Inter, sans-serif' });
-
-  const pad = 48;
+  const pad = 0;
   const innerX = pad;
   const innerY = pad;
   const innerW = w - pad * 2;
   const innerH = h - pad * 2;
 
-  const borderPulse = 0.65 + Math.sin(time * 4.5) * 0.18;
-  ctx.strokeStyle = `rgba(140,220,255,${(0.16 + borderPulse * 0.28).toFixed(3)})`;
-  ctx.lineWidth = 4;
-  roundRect(ctx, innerX, innerY, innerW, innerH, 44);
-  ctx.stroke();
-
-  roundRect(ctx, innerX, innerY, innerW, innerH, 44);
+  roundRect(ctx, innerX, innerY, innerW, innerH, 0);
   ctx.save();
   ctx.clip();
 
@@ -1869,29 +1839,6 @@ function drawAvatarScreenCanvas(ctx, w, h, time) {
   ctx.fillRect(innerX, innerY, innerW, innerH);
   ctx.restore();
 
-  ctx.strokeStyle = 'rgba(165,236,255,0.55)';
-  ctx.lineWidth = 5;
-  const c = 26;
-  const corners = [
-    [innerX + 10, innerY + 10, 1, 1],
-    [innerX + innerW - 10, innerY + 10, -1, 1],
-    [innerX + 10, innerY + innerH - 10, 1, -1],
-    [innerX + innerW - 10, innerY + innerH - 10, -1, -1],
-  ];
-  for (const [cx, cy, sx, sy] of corners) {
-    ctx.beginPath();
-    ctx.moveTo(cx, cy + sy * c);
-    ctx.lineTo(cx, cy);
-    ctx.lineTo(cx + sx * c, cy);
-    ctx.stroke();
-  }
-
-  // Bottom docking controls / status buttons (tablet hardware style)
-  const dockY = h - 42;
-  drawUiPill(ctx, w * 0.10, dockY, w * 0.16, 22, 'GRID', { font: '700 10px Inter, sans-serif' });
-  drawUiPill(ctx, w * 0.28, dockY, w * 0.16, 22, 'ZOOM', { active: true, font: '700 10px Inter, sans-serif' });
-  drawUiPill(ctx, w * 0.56, dockY, w * 0.14, 22, 'HDR', { font: '700 10px Inter, sans-serif' });
-  drawUiPill(ctx, w * 0.72, dockY, w * 0.18, 22, 'SYNC OK', { active: state.avatarImgLoaded, font: '700 10px Inter, sans-serif' });
 }
 
 function renderDynamicScreens(force = false) {
