@@ -1796,25 +1796,29 @@ function drawNameScreenCanvas(ctx, w, h, time) {
 }
 
 function drawAvatarScreenCanvas(ctx, w, h, time) {
+  // Fill entire canvas with dark background first
+  ctx.fillStyle = 'rgb(8, 10, 18)';
+  ctx.fillRect(0, 0, w, h);
+
   const pad = 0;
   const innerX = pad;
   const innerY = pad;
   const innerW = w - pad * 2;
   const innerH = h - pad * 2;
 
-  roundRect(ctx, innerX, innerY, innerW, innerH, 0);
   ctx.save();
+  ctx.beginPath();
+  ctx.rect(innerX, innerY, innerW, innerH);
   ctx.clip();
 
   const img = state.avatarImgEl;
   if (img && state.avatarImgLoaded) {
-    const floatX = 0;
-    const floatY = 0;
-    const scale = Math.min(innerW / img.width, innerH / img.height);
+    // Use cover (Math.max) so image always fills the full screen with no white gaps
+    const scale = Math.max(innerW / img.width, innerH / img.height);
     const dw = img.width * scale;
     const dh = img.height * scale;
-    const dx = innerX + (innerW - dw) / 2 + floatX;
-    const dy = innerY + (innerH - dh) / 2 + floatY;
+    const dx = innerX + (innerW - dw) / 2;
+    const dy = innerY + (innerH - dh) / 2;
     ctx.drawImage(img, dx, dy, dw, dh);
   } else {
     const ph = ctx.createLinearGradient(innerX, innerY, innerX + innerW, innerY + innerH);
