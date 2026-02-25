@@ -2202,6 +2202,70 @@ function drawImageCover(ctx, img, x, y, w, h) {
   ctx.drawImage(img, dx, dy, dw, dh);
 }
 
+function drawImageContain(ctx, img, x, y, w, h) {
+  const iw = Math.max(1, img.naturalWidth || img.width || 1);
+  const ih = Math.max(1, img.naturalHeight || img.height || 1);
+  const scale = Math.min(w / iw, h / ih);
+  const dw = iw * scale;
+  const dh = ih * scale;
+  const dx = x + (w - dw) / 2;
+  const dy = y + (h - dh) / 2;
+  ctx.drawImage(img, dx, dy, dw, dh);
+  return { dx, dy, dw, dh };
+}
+
+function trimTransparentImageToCanvas(img, alphaThreshold = 8) {
+  const iw = Math.max(1, img.naturalWidth || img.width || 1);
+  const ih = Math.max(1, img.naturalHeight || img.height || 1);
+  const src = document.createElement('canvas');
+  src.width = iw;
+  src.height = ih;
+  const sctx = src.getContext('2d', { willReadFrequently: true });
+  if (!sctx) return img;
+  sctx.drawImage(img, 0, 0, iw, ih);
+
+  let data;
+  try {
+    data = sctx.getImageData(0, 0, iw, ih).data;
+  } catch {
+    return img;
+  }
+
+  let minX = iw, minY = ih, maxX = -1, maxY = -1;
+  for (let y = 0; y < ih; y++) {
+    for (let x = 0; x < iw; x++) {
+      const a = data[(y * iw + x) * 4 + 3];
+      if (a > alphaThreshold) {
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (x > maxX) maxX = x;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+
+  if (maxX < minX || maxY < minY) return img;
+
+  const pad = Math.max(8, Math.round(Math.min(iw, ih) * 0.02));
+  minX = Math.max(0, minX - pad);
+  minY = Math.max(0, minY - pad);
+  maxX = Math.min(iw - 1, maxX + pad);
+  maxY = Math.min(ih - 1, maxY + pad);
+
+  const tw = Math.max(1, maxX - minX + 1);
+  const th = Math.max(1, maxY - minY + 1);
+  // If almost full image is opaque, keep original (avoids unnecessary crop on fallback captures)
+  if (tw > iw * 0.94 && th > ih * 0.94) return img;
+
+  const out = document.createElement('canvas');
+  out.width = tw;
+  out.height = th;
+  const octx = out.getContext('2d');
+  if (!octx) return img;
+  octx.drawImage(src, minX, minY, tw, th, 0, 0, tw, th);
+  return out;
+}
+
 function drawSpaceBackground(ctx, width, height, seedText = '') {
   const rand = seededRand(hashStringToSeed(seedText));
 
@@ -2311,7 +2375,8 @@ function captureCapsuleTransparentDataUrl() {
 
 async function buildPolaroidCapsuleImageDataUrl() {
   const capsuleDataUrl = captureCapsuleTransparentDataUrl() || state._sealedPngDataUrl || renderer.domElement.toDataURL('image/png');
-  const capsuleImg = await loadImageFromDataUrl(capsuleDataUrl);
+  const capsuleImgRaw = await loadImageFromDataUrl(capsuleDataUrl);
+  const capsuleImg = trimTransparentImageToCanvas(capsuleImgRaw);
 
   const W = 1600;
   const H = 1200;
@@ -2358,19 +2423,50 @@ async function buildPolaroidCapsuleImageDataUrl() {
   ctx.rect(innerX, innerY, innerW, innerH);
   ctx.clip();
 
-  // Add extra cosmic depth inside photo window too
-  drawSpaceBackground(ctx, W, H, `${state.nickname || 'user'}-inner`);
+  // Add dedicated cosmic background INSIDE the polaroid photo window (so no empty/flat areas behind the box)
+  const innerBg = document.createElement('canvas');
+  innerBg.width = Math.max(1, Math.floor(innerW));
+  innerBg.height = Math.max(1, Math.floor(innerH));
+  const innerBgCtx = innerBg.getContext('2d');
+  if (innerBgCtx) {
+    drawSpaceBackground(innerBgCtx, innerBg.width, innerBg.height, `${state.nickname || 'user'}-inner`);
 
-  // dark vignette plate for subject grounding
-  const plate = ctx.createRadialGradient(innerX + innerW * 0.5, innerY + innerH * 0.75, 10, innerX + innerW * 0.5, innerY + innerH * 0.76, innerW * 0.55);
-  plate.addColorStop(0, 'rgba(7,14,28,0.9)');
-  plate.addColorStop(0.65, 'rgba(6,10,20,0.55)');
+    // extra nebula/glow behind the capsule
+    const cx = innerBg.width * 0.52;
+    const cy = innerBg.height * 0.55;
+    const glow = innerBgCtx.createRadialGradient(cx, cy, 10, cx, cy, innerBg.width * 0.42);
+    glow.addColorStop(0, 'rgba(115,185,255,0.20)');
+    glow.addColorStop(0.55, 'rgba(98,110,255,0.12)');
+    glow.addColorStop(1, 'rgba(0,0,0,0)');
+    innerBgCtx.fillStyle = glow;
+    innerBgCtx.fillRect(0, 0, innerBg.width, innerBg.height);
+
+    // dark horizon/platform at bottom for depth
+    innerBgCtx.fillStyle = 'rgba(3,8,18,0.9)';
+    innerBgCtx.beginPath();
+    innerBgCtx.ellipse(innerBg.width * 0.5, innerBg.height * 1.02, innerBg.width * 0.62, innerBg.height * 0.27, 0, Math.PI, Math.PI * 2);
+    innerBgCtx.fill();
+  }
+  ctx.drawImage(innerBg, innerX, innerY, innerW, innerH);
+
+  // dark vignette plate for subject grounding (behind capsule)
+  const plate = ctx.createRadialGradient(innerX + innerW * 0.5, innerY + innerH * 0.72, 10, innerX + innerW * 0.5, innerY + innerH * 0.74, innerW * 0.48);
+  plate.addColorStop(0, 'rgba(7,14,28,0.78)');
+  plate.addColorStop(0.65, 'rgba(6,10,20,0.38)');
   plate.addColorStop(1, 'rgba(6,10,20,0)');
   ctx.fillStyle = plate;
   ctx.fillRect(innerX, innerY, innerW, innerH);
 
-  // draw capsule render over the cosmic inner background
-  drawImageCover(ctx, capsuleImg, innerX, innerY, innerW, innerH);
+  // draw capsule render over the cosmic inner background with contain (keeps visible backdrop)
+  const placed = drawImageContain(ctx, capsuleImg, innerX + innerW * 0.11, innerY + innerH * 0.06, innerW * 0.78, innerH * 0.80);
+
+  // soft drop shadow/glow under capsule to blend with bg
+  const shadowY = placed.dy + placed.dh * 0.86;
+  const shadow = ctx.createRadialGradient(placed.dx + placed.dw * 0.5, shadowY, 5, placed.dx + placed.dw * 0.5, shadowY, placed.dw * 0.42);
+  shadow.addColorStop(0, 'rgba(0,0,0,0.34)');
+  shadow.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = shadow;
+  ctx.fillRect(innerX, innerY, innerW, innerH);
 
   // subtle photo vignette
   const photoVig = ctx.createRadialGradient(innerX + innerW / 2, innerY + innerH / 2, innerW * 0.2, innerX + innerW / 2, innerY + innerH / 2, innerW * 0.85);
@@ -2389,9 +2485,14 @@ async function buildPolaroidCapsuleImageDataUrl() {
   ctx.fillStyle = '#24438a';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.font = '700 30px "Marker Felt", "Bradley Hand", "Comic Sans MS", cursive';
-  ctx.fillText('My MagicBlock time capsule', 0, y + polH - 120);
-  ctx.fillText('sealed until TGE!', 0, y + polH - 72);
+  ctx.shadowColor = 'rgba(36,67,138,0.20)';
+  ctx.shadowBlur = 4;
+  ctx.font = '700 42px "Marker Felt", "Bradley Hand", "Comic Sans MS", cursive';
+  ctx.fillText('My MagicBlock time capsule', 0, y + polH - 132);
+  ctx.font = '700 46px "Marker Felt", "Bradley Hand", "Comic Sans MS", cursive';
+  ctx.fillText('sealed until TGE!', 0, y + polH - 76);
+  ctx.shadowColor = 'transparent';
+  ctx.shadowBlur = 0;
 
   // Optional tiny typed nickname in corner (helps identify user exports)
   if (state.nickname) {
