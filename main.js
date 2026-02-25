@@ -1303,7 +1303,8 @@ const SCREEN_UV_TUNE = {
   // Screenshot: only bezel chrome visible, text/content completely absent.
   // Trying PI/2 (CCW) with a slight zoom-out to expose the content region.
   lid: {
-    rotation: Math.PI / 2,
+    // FIX (2026-02-25): restore electronic lock UI visibility (content was shifted off-screen).
+    rotation: 0,
     repeatX:  1.0,
     repeatY:  1.0,
     offsetX:  0.0,
@@ -1319,7 +1320,8 @@ const SCREEN_UV_TUNE = {
   // -PI/2 rotation is correct; need offsetY to shift content to screen centre.
   // With rotation=-PI/2 + center=0.5,0.5: offset pushes in rotated UV space.
   name: {
-    rotation: -Math.PI / 2,
+    // FIX (2026-02-25): neutral orientation so nickname stays horizontal / non-mirrored.
+    rotation: 0,
     repeatX:   1.0,
     repeatY:   1.0,
     offsetX:   0.0,
@@ -1333,22 +1335,25 @@ const SCREEN_UV_TUNE = {
   // Avatar — large square panel (bottom-right front face).
   // Screenshot: content fills too much + shifted up-left → zoom out + recentre.
   avatar: {
-    rotation: -Math.PI / 2,
-    repeatX:   1.35,
-    repeatY:   1.35,
-    offsetX:  -0.175,
-    offsetY:   0.175,
+    // FIX (2026-02-25): keep full avatar centered with no UV zoom/crop.
+    // Cropping/offset is handled in canvas painter now (contain fit), so UV stays neutral.
+    rotation: 0,
+    repeatX:   1.0,
+    repeatY:   1.0,
+    offsetX:   0.0,
+    offsetY:   0.0,
     flipX:     false,
     flipY:     false,
-    wrapS:     'repeat',
-    wrapT:     'repeat',
+    wrapS:     'clamp',
+    wrapT:     'clamp',
   },
 
   // Logo — small portrait panel (left side).
   // Screenshot: white strip (footer area) showing → canvas upside-down in UV.
   // Flipping to Math.PI/2 should invert the orientation.
   logo: {
-    rotation: Math.PI / 2,
+    // FIX (2026-02-25): neutral orientation so MB logo card is centered and not clipped.
+    rotation: 0,
     repeatX:   1.0,
     repeatY:   1.0,
     offsetX:   0.0,
@@ -1951,13 +1956,22 @@ function drawAvatarScreenCanvas(ctx, w, h, time) {
 
   const img = state.avatarImgEl;
   if (img && state.avatarImgLoaded) {
-    const floatX = Math.sin(time * 1.6) * 7;
-    const floatY = Math.cos(time * 1.9) * 6;
-    const scale = Math.max(innerW / img.width, innerH / img.height) * (1.03 + Math.sin(time * 1.4) * 0.01);
-    const dw = img.width * scale;
-    const dh = img.height * scale;
-    const dx = innerX + (innerW - dw) / 2 + floatX;
-    const dy = innerY + (innerH - dh) / 2 + floatY;
+    // FIX (2026-02-25): use CONTAIN fit (not cover) so avatar is centered and never cropped.
+    const iw = img.naturalWidth || img.width || 1;
+    const ih = img.naturalHeight || img.height || 1;
+    const scale = Math.min(innerW / iw, innerH / ih);
+    const dw = iw * scale;
+    const dh = ih * scale;
+    const dx = innerX + (innerW - dw) / 2;
+    const dy = innerY + (innerH - dh) / 2;
+
+    // subtle panel glow behind avatar for empty margins (letterboxing) to look intentional
+    const g = ctx.createRadialGradient(w * 0.5, h * 0.52, 0, w * 0.5, h * 0.52, Math.max(innerW, innerH) * 0.6);
+    g.addColorStop(0, 'rgba(38,66,120,0.20)');
+    g.addColorStop(1, 'rgba(8,14,26,0.00)');
+    ctx.fillStyle = g;
+    ctx.fillRect(innerX, innerY, innerW, innerH);
+
     ctx.drawImage(img, dx, dy, dw, dh);
   } else {
     const ph = ctx.createLinearGradient(innerX, innerY, innerX + innerW, innerY + innerH);
