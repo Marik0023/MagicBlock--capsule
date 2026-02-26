@@ -37,7 +37,7 @@ const screenTuner = {
   // x/y are in screen fraction (-1..1), scale/stretch are multipliers, rotate is in degrees
   name:   { x: 0.00, y: 0.250, scale: 0.56, stretchX: 2.30, stretchY: 1.00, rotate: -90, flipX: true, flipY: false },
   avatar: { x: 0.00, y: -0.255, scale: 1.31, stretchX: 0.78, stretchY: 0.63, rotate: 0, flipX: true, flipY: true },
-  lid:    { x: 0.275, y: 0.160, scale: 0.60, stretchX: 1.00, stretchY: 1.00, rotate: 0, flipX: false, flipY: true },
+  lid:    { x: 0.275, y: 0.160, scale: 0.60, stretchX: 1.00, stretchY: 1.00, rotate: 0, flipX: true, flipY: true },
 };
 
 // === SCREEN TUNER UI (temporary; used to pick perfect values, then removed) ===
