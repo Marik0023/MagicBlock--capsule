@@ -37,11 +37,11 @@ const screenTuner = {
   // x/y are in screen fraction (-1..1), scale/stretch are multipliers, rotate is in degrees
   name:   { x: 0.00, y: 0.250, scale: 0.56, stretchX: 2.30, stretchY: 1.00, rotate: -90, flipX: true, flipY: false },
   avatar: { x: 0.00, y: -0.255, scale: 1.31, stretchX: 0.78, stretchY: 0.63, rotate: 0, flipX: true, flipY: true },
-  lid:    { x: 0.275, y: 0.160, scale: 0.60, stretchX: 1.00, stretchY: 1.00, rotate: 0, flipX: true, flipY: true },
+  lid:    { x: 0.275, y: 0.160, scale: 0.60, stretchX: 1.00, stretchY: 1.00, rotate: 0, flipX: false, flipY: true },
 };
 
 // === SCREEN TUNER UI (temporary; used to pick perfect values, then removed) ===
-window.__SCREEN_TUNER_DYNAMIC = true;
+window.__SCREEN_TUNER_DYNAMIC = false;
 
 
 const SUPABASE_URL = 'https://dzamfjphmomvkepirxoh.supabase.co';
@@ -1700,10 +1700,8 @@ const dv = (maxV - minV) || 1;
 
     let orient;
     if (kind === 'lid') {
-      // Lid: +90° and flip Y to keep text upright on this export
-      const flipY = new THREE.Matrix3();
-      flipY.set(1, 0, 0, 0, -1, 1, 0, 0, 1);
-      orient = flipY.multiply(rotAround(Math.PI / 2));
+      // Lid: keep UV unrotated here; apply flip/rotate in the *canvas* painter via screenTuner.lid.
+      orient = rotAround(0);
     } else if (kind === 'name') {
       // screen_name is landscape in this model — do NOT rotate it.
       orient = rotAround(0);
@@ -1714,17 +1712,19 @@ const dv = (maxV - minV) || 1;
 
     // Optional user-controlled rotate/flip (debug tuner)
     const t = (kind === 'lid') ? screenTuner.lid : (kind === 'name') ? screenTuner.name : (kind === 'avatar') ? screenTuner.avatar : null;
+    // For lid, the flip/rotate is handled in the canvas painter to avoid double transforms.
+    const tUV = (kind === 'lid') ? { rotate: 0, flipX: false, flipY: false } : t;
 
-    if (t && Number.isFinite(t.rotate) && t.rotate !== 0) {
+    if (tUV && Number.isFinite(tUV.rotate) && tUV.rotate !== 0) {
       orient = rotAround((t.rotate * Math.PI) / 180).multiply(orient);
     }
 
-    if (t?.flipX) {
+    if (tUV?.flipX) {
       const fx = new THREE.Matrix3();
       fx.set(-1, 0, 1,  0, 1, 0,  0, 0, 1);
       orient = fx.multiply(orient);
     }
-    if (t?.flipY) {
+    if (tUV?.flipY) {
       const fy = new THREE.Matrix3();
       fy.set(1, 0, 0,  0, -1, 1,  0, 0, 1);
       orient = fy.multiply(orient);
