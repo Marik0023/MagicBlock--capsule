@@ -103,25 +103,6 @@ const state = {
 const MIN_MESSAGE_CHARS = 10;
 const CAPSULE_STORAGE_KEY = 'magicblock_time_capsule_state_v1';
 
-// === Screen UV Tuning (hardcoded) ===
-// These values map each canvas texture onto the corresponding GLB screen mesh via `texture.matrix`.
-// Units:
-//  - x,y: normalized UV translation after bounds-normalization (roughly [-0.5..0.5])
-//  - scale: uniform scale
-//  - sx,sy: non-uniform stretch multipliers
-//  - rotDeg: rotation in degrees (about UV center)
-//  - flipX/flipY: mirror in UV space (about UV center)
-//  - swapUV: swaps U and V axes (for lid UV layouts exported sideways)
-const SCREEN_UV_TUNING = {
-  name:   { x: 0.000, y: 0.250, scale: 0.56, sx: 2.30, sy: 1.00, rotDeg: -90, flipX: true,  flipY: false, swapUV: false },
-  avatar: { x: 0.000, y: -0.255, scale: 1.31, sx: 0.78, sy: 0.63, rotDeg: 0,   flipX: true,  flipY: true,  swapUV: false },
-
-  // Lid: start from the last "good" position you tuned earlier, but add swapUV support
-  // (Some exports have U/V swapped on the lid display.)
-  // If the lid still looks rotated, change rotDeg to -90 or +90.
-  lid:    { x: 0.275, y: 0.160, scale: 0.60, sx: 1.00, sy: 1.00, rotDeg: 0,   flipX: false, flipY: true,  swapUV: true },
-};
-
 function getTrimmedMessageLength(value = state.message) {
   return Array.from(String(value || '').trim()).length;
 }
@@ -1646,129 +1627,32 @@ function computeFrontGlassUvBounds(mesh) {
   return result;
 }
 
-
 function calibrateScreenTextureForMesh(mesh, tex, kind = 'side') {
   if (!mesh?.isMesh || !tex) return;
-
   const geo = mesh.geometry;
   const uva = geo?.attributes?.uv?.array;
   const uvCount = geo?.attributes?.uv?.count || 0;
   if (!uva || uvCount < 3) return;
 
-  // Resolve tuning per-screen.
-  const tuning =
-    kind === 'name' ? SCREEN_UV_TUNING.name :
-    kind === 'avatar' ? SCREEN_UV_TUNING.avatar :
-    kind === 'lid' ? SCREEN_UV_TUNING.lid :
-    null;
-
-  // Cache matrix per (kind) + tuning signature, so it updates if you edit constants.
-  const sig = tuning
-    ? `${tuning.x},${tuning.y},${tuning.scale},${tuning.sx},${tuning.sy},${tuning.rotDeg},${tuning.flipX?'1':'0'},${tuning.flipY?'1':'0'},${tuning.swapUV?'1':'0'}`
-    : 'none';
-  const cacheKey = `__screenTexMatrix_${kind}_${sig}`;
-
+  const cacheKey = `__screenTexMatrix_${kind}`;
   if (!mesh.userData[cacheKey]) {
-    // 1) Bounds normalization: map the *front glass* UV region -> [0..1]
-    const fb = computeFrontGlassUvBounds(mesh);
-    let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
+    // 1) UV bounds normalization: map the *front glass* UV region -> [0..1]
+// (the mesh can include frame/sides/backfaces; using global UV bounds crops the UI)
+const fb = computeFrontGlassUvBounds(mesh);
+let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
 
-    if (fb) {
-      ({ minU, maxU, minV, maxV } = fb);
-    } else {
-      for (let i = 0; i < uvCount; i++) {
-        const u = uva[i * 2];
-        const v = uva[i * 2 + 1];
-        if (u < minU) minU = u;
-        if (u > maxU) maxU = u;
-        if (v < minV) minV = v;
-        if (v > maxV) maxV = v;
-      }
-    }
-
-    const du = (maxU - minU) || 1;
-    const dv = (maxV - minV) || 1;
-
-    const bounds = new THREE.Matrix3();
-    bounds.set(
-      1 / du, 0, -minU / du,
-      0, 1 / dv, -minV / dv,
-      0, 0, 1
-    );
-
-    // Helpers
-    const T = (tx, ty) => {
-      const m = new THREE.Matrix3();
-      m.set(1, 0, tx, 0, 1, ty, 0, 0, 1);
-      return m;
-    };
-    const S = (sx, sy) => {
-      const m = new THREE.Matrix3();
-      m.set(sx, 0, 0, 0, sy, 0, 0, 0, 1);
-      return m;
-    };
-    const R = (rad) => {
-      const c = Math.cos(rad);
-      const s = Math.sin(rad);
-      const m = new THREE.Matrix3();
-      m.set(c, -s, 0, s, c, 0, 0, 0, 1);
-      return m;
-    };
-    const flipMX = () => {
-      const m = new THREE.Matrix3();
-      // u -> 1-u
-      m.set(-1, 0, 1, 0, 1, 0, 0, 0, 1);
-      return m;
-    };
-    const flipMY = () => {
-      const m = new THREE.Matrix3();
-      // v -> 1-v
-      m.set(1, 0, 0, 0, -1, 1, 0, 0, 1);
-      return m;
-    };
-    const swapUV = () => {
-      const m = new THREE.Matrix3();
-      // (u,v) -> (v,u)
-      m.set(0, 1, 0, 1, 0, 0, 0, 0, 1);
-      return m;
-    };
-
-    const aroundCenter = (m) => T(0.5, 0.5).multiply(m).multiply(T(-0.5, -0.5));
-
-    let M = bounds;
-
-    if (tuning) {
-      // Optional U/V swap (some lid exports)
-      if (tuning.swapUV) M = aroundCenter(swapUV()).multiply(M);
-
-      // Translation (after normalization)
-      if (tuning.x || tuning.y) M = T(tuning.x, tuning.y).multiply(M);
-
-      // Scale / stretch / rotate / flips around UV center
-      const uni = tuning.scale ?? 1;
-      const sx = (tuning.sx ?? 1) * uni;
-      const sy = (tuning.sy ?? 1) * uni;
-
-      if (sx !== 1 || sy !== 1) M = aroundCenter(S(sx, sy)).multiply(M);
-
-      const rotRad = ((tuning.rotDeg || 0) * Math.PI) / 180;
-      if (rotRad) M = aroundCenter(R(rotRad)).multiply(M);
-
-      if (tuning.flipX) M = aroundCenter(flipMX()).multiply(M);
-      if (tuning.flipY) M = aroundCenter(flipMY()).multiply(M);
-    }
-
-    mesh.userData[cacheKey] = M;
+if (fb) {
+  ({ minU, maxU, minV, maxV } = fb);
+} else {
+  for (let i = 0; i < uvCount; i++) {
+    const u = uva[i * 2];
+    const v = uva[i * 2 + 1];
+    if (u < minU) minU = u;
+    if (u > maxU) maxU = u;
+    if (v < minV) minV = v;
+    if (v > maxV) maxV = v;
   }
-
-  tex.flipY = false;
-  tex.wrapS = THREE.ClampToEdgeWrapping;
-  tex.wrapT = THREE.ClampToEdgeWrapping;
-  tex.matrixAutoUpdate = false;
-  tex.matrix.copy(mesh.userData[cacheKey]);
-  tex.needsUpdate = true;
 }
-
 
 const du = (maxU - minU) || 1;
 const dv = (maxV - minV) || 1;
@@ -1797,10 +1681,10 @@ const dv = (maxV - minV) || 1;
 
     let orient;
     if (kind === 'lid') {
-      // Lid: +90° and flip Y to keep text upright on this export
-      const flipY = new THREE.Matrix3();
-      flipY.set(1, 0, 0, 0, -1, 1, 0, 0, 1);
-      orient = flipY.multiply(rotAround(Math.PI / 2));
+      // Lid: do NOT apply UV rotation/flip here. The lid screen's UVs are already aligned;
+      // we handle any required orientation in the canvas painter to avoid double-transform issues.
+      orient = new THREE.Matrix3();
+      orient.identity();
     } else {
       // Side screens: -90° (standard for this export)
       orient = rotAround(-Math.PI / 2);
@@ -2182,6 +2066,13 @@ function drawLockGlyph(ctx, x, y, size, progressClosed) {
 }
 
 function drawLidScreenCanvas(ctx, w, h, time) {
+  // Orientation fix for this model: draw the lid UI upright in canvas space.
+  // (We intentionally avoid UV rotate/flip for lid to prevent double transforms.)
+  ctx.save();
+  ctx.translate(w / 2, h / 2);
+  ctx.rotate(Math.PI); // 180°
+  ctx.translate(-w / 2, -h / 2);
+
   // Clean screen: no extra bezel/borders/buttons (hardware frame is already in the 3D model)
   drawScreenGlassBg(ctx, w, h, {
     radius: 0,
@@ -2254,6 +2145,7 @@ function drawLidScreenCanvas(ctx, w, h, time) {
   ctx.fillRect(barX, barY, barW, barH);
   ctx.restore();
 }
+  ctx.restore();
 
 
 function drawNameScreenCanvas(ctx, w, h, time) {
@@ -2415,7 +2307,7 @@ function renderDynamicScreens(force = false) {
     if (!(nameMat && (nameMat.emissiveMap === pack.tex || nameMat.map === pack.tex))) {
       state.screens.name.material = createScreenMaterial(pack.tex, 0xffffff, 1.0);
     }
-    calibrateScreenTextureForMesh(state.screens.name, pack.tex, 'name');
+    calibrateScreenTextureForMesh(state.screens.name, pack.tex, 'side');
     state.screens.name.material.emissiveIntensity = 1.0 + Math.sin(now * 3.7) * 0.08;
   }
 
@@ -2427,7 +2319,7 @@ function renderDynamicScreens(force = false) {
     if (!(avMat && (avMat.emissiveMap === pack.tex || avMat.map === pack.tex))) {
       state.screens.avatar.material = createScreenMaterial(pack.tex, 0xffffff, 0.95);
     }
-    calibrateScreenTextureForMesh(state.screens.avatar, pack.tex, 'avatar');
+    calibrateScreenTextureForMesh(state.screens.avatar, pack.tex, 'side');
     state.screens.avatar.material.emissiveIntensity = 0.95 + Math.sin(now * 3.1 + 0.8) * 0.06;
   }
 }
