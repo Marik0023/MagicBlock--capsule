@@ -1059,30 +1059,53 @@ loader.load(
     // Центруємо екрани по worldPos — рухаємо батьків поки worldPos.x != 0
     // Підбираємо рівень батька який реально керує X позицією
     setTimeout(() => {
-      const centerScreen = (screenObj, targetWorldX) => {
+      // Знаходимо батька який реально несе X зміщення
+      // Піднімаємось по дереву і шукаємо вузол де worldPos.x != localPos.x без урахування батьків
+      const findAndCenter = (screenObj) => {
         if (!screenObj) return;
-        // Піднімаємось по ланцюжку батьків, шукаємо того хто впливає на X
-        // Пробуємо дідуся (parent.parent) — бо батько вже зміщений але worldPos не змінився
-        const grandParent = screenObj.parent?.parent;
-        const parent = screenObj.parent;
 
-        // Спочатку скидаємо зміщення батька яке вже додали раніше
-        if (parent) parent.position.x = 0;
+        // Спочатку скидаємо наші попередні зміщення на всіх рівнях
+        let node = screenObj.parent;
+        while (node) {
+          if (node._centeredByUs) {
+            node.position.x -= node._centerOffset;
+            node._centeredByUs = false;
+            node._centerOffset = 0;
+          }
+          node = node.parent;
+        }
 
-        // Читаємо worldPos після скидання
+        // Тепер піднімаємось і шукаємо батька де можна вирівняти
+        // Стратегія: беремо worldPos меша, знаходимо батька найближчого до кореня
+        // у якого localPos.x відповідає за зміщення
         const wp = new THREE.Vector3();
         screenObj.getWorldPosition(wp);
-        const diff = targetWorldX - wp.x;
+        const currentX = wp.x;
+        if (Math.abs(currentX) < 0.01) return; // вже по центру
 
-        // Тепер зміщуємо батька на потрібну різницю
-        if (parent) {
-          parent.position.x += diff;
+        // Шукаємо батька у якого localPos.x != 0 (він несе зміщення)
+        let candidate = screenObj.parent;
+        let deepest = null;
+        while (candidate) {
+          if (Math.abs(candidate.position.x) > 0.001) {
+            deepest = candidate;
+          }
+          candidate = candidate.parent;
+        }
+
+        // Якщо знайшли — зміщуємо його на -currentX
+        const target = deepest || screenObj.parent;
+        if (target) {
+          const offset = -currentX;
+          target.position.x += offset;
+          target._centeredByUs = true;
+          target._centerOffset = offset;
         }
       };
 
-      centerScreen(state.screens.lid, 0);
-      centerScreen(state.screens.name, 0);
-      centerScreen(state.screens.avatar, 0);
+      findAndCenter(state.screens.lid);
+      findAndCenter(state.screens.name);
+      findAndCenter(state.screens.avatar);
 
       // Логуємо результат
       ['lid','name','avatar'].forEach(k => {
