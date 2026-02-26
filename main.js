@@ -40,8 +40,145 @@ const screenTuner = {
   lid:    { x: 0.275, y: 0.160, scale: 0.60, stretchX: 1.00, stretchY: 1.00, rotate: 0, flipX: true, flipY: true },
 };
 
-// Screen tuner UI removed after calibration.
-window.__SCREEN_TUNER_DYNAMIC = false;
+// === SCREEN TUNER UI (temporary; used to pick perfect values, then removed) ===
+window.__SCREEN_TUNER_DYNAMIC = true;
+
+function mountScreenTunerUI() {
+  const wrap = document.createElement('div');
+  wrap.id = 'screenTuner';
+  wrap.style.cssText = `
+    position:fixed; top:12px; right:12px; z-index:99999;
+    width:320px; max-height: calc(100vh - 24px); overflow:auto;
+    padding:12px;
+    background:rgba(0,0,0,.60); color:#fff;
+    font:12px/1.2 system-ui, -apple-system, Segoe UI, Roboto, Arial;
+    border:1px solid rgba(255,255,255,.18); border-radius:12px;
+    backdrop-filter: blur(6px);
+  `;
+
+  const section = (id, title) => `
+    <div style="margin:10px 0 6px; font-weight:800; letter-spacing:.2px;">${title}</div>
+    <div class="row"><span>X</span><input id="${id}_x" type="range" min="-0.60" max="0.60" step="0.005"></div>
+    <div class="row"><span>Y</span><input id="${id}_y" type="range" min="-0.60" max="0.60" step="0.005"></div>
+    <div class="row"><span>Scale</span><input id="${id}_s" type="range" min="0.20" max="2.50" step="0.01"></div>
+    <div class="row"><span>StrX</span><input id="${id}_sx" type="range" min="0.30" max="2.50" step="0.01"></div>
+    <div class="row"><span>StrY</span><input id="${id}_sy" type="range" min="0.30" max="2.50" step="0.01"></div>
+    <div class="row"><span>Rot</span><input id="${id}_r" type="range" min="-180" max="180" step="1"></div>
+    <div style="display:flex; gap:10px; align-items:center; margin:6px 0 2px;">
+      <span style="min-width:36px; opacity:.9;">Flip</span>
+      <label style="display:flex; gap:6px; align-items:center; cursor:pointer;">
+        <input id="${id}_fx" type="checkbox"> <span>Flip X</span>
+      </label>
+      <label style="display:flex; gap:6px; align-items:center; cursor:pointer;">
+        <input id="${id}_fy" type="checkbox"> <span>Flip Y</span>
+      </label>
+    </div>
+    <div id="${id}_val" style="opacity:.85; margin:3px 0 8px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;"></div>
+  `;
+
+  wrap.innerHTML = `
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
+      <div style="font-weight:900;">Screen Tuner</div>
+      <button id="tunerClose" style="
+        border:1px solid rgba(255,255,255,.22);
+        background:rgba(255,255,255,.08); color:#fff;
+        border-radius:10px; padding:6px 10px; cursor:pointer;
+      ">Hide (T)</button>
+    </div>
+
+    <div style="opacity:.85; margin:6px 0 10px;">
+      Use sliders to align. When done, click <b>Copy values</b> and send them to me — I'll hardcode them and remove this panel.
+    </div>
+
+    ${section('name','screen_name')}
+    ${section('avatar','screen_avatar')}
+    ${section('lid','screen_lid')}
+
+    <button id="copyTuners" style="
+      width:100%; margin-top:6px; padding:10px 12px; border-radius:10px;
+      border:1px solid rgba(255,255,255,.22);
+      background:rgba(255,255,255,.10); color:#fff; cursor:pointer;
+      font-weight:800;
+    ">Copy values</button>
+  `;
+
+  // Row styling
+  wrap.querySelectorAll('.row').forEach((row) => {
+    row.style.cssText = 'display:grid; grid-template-columns:46px 1fr; gap:10px; align-items:center; margin:5px 0;';
+    const inp = row.querySelector('input');
+    inp.style.width = '100%';
+  });
+
+  const $ = (id) => wrap.querySelector('#' + id);
+
+  function bind(prefix, obj) {
+    $(prefix + '_x').value  = obj.x;
+    $(prefix + '_y').value  = obj.y;
+    $(prefix + '_s').value  = obj.scale;
+    $(prefix + '_sx').value = obj.stretchX;
+    $(prefix + '_sy').value = obj.stretchY;
+    $(prefix + '_r').value  = obj.rotate;
+    $(prefix + '_fx').checked = !!obj.flipX;
+    $(prefix + '_fy').checked = !!obj.flipY;
+  }
+
+  function read(prefix, obj) {
+    obj.x = parseFloat($(prefix + '_x').value);
+    obj.y = parseFloat($(prefix + '_y').value);
+    obj.scale = parseFloat($(prefix + '_s').value);
+    obj.stretchX = parseFloat($(prefix + '_sx').value);
+    obj.stretchY = parseFloat($(prefix + '_sy').value);
+    obj.rotate = parseFloat($(prefix + '_r').value);
+    obj.flipX = $(prefix + '_fx').checked;
+    obj.flipY = $(prefix + '_fy').checked;
+
+    $(prefix + '_val').textContent =
+      `x=${obj.x.toFixed(3)} y=${obj.y.toFixed(3)} s=${obj.scale.toFixed(2)} ` +
+      `sx=${obj.stretchX.toFixed(2)} sy=${obj.stretchY.toFixed(2)} r=${obj.rotate.toFixed(0)}° ` +
+      `flipX=${obj.flipX} flipY=${obj.flipY}`;
+  }
+
+  // init
+  bind('name', screenTuner.name);
+  bind('avatar', screenTuner.avatar);
+  bind('lid', screenTuner.lid);
+  read('name', screenTuner.name);
+  read('avatar', screenTuner.avatar);
+  read('lid', screenTuner.lid);
+
+  const onChange = () => {
+    read('name', screenTuner.name);
+    read('avatar', screenTuner.avatar);
+    read('lid', screenTuner.lid);
+  };
+
+  wrap.querySelectorAll('input').forEach((inp) => inp.addEventListener('input', onChange));
+  wrap.querySelectorAll('input[type=checkbox]').forEach((inp) => inp.addEventListener('change', onChange));
+
+  $('copyTuners').addEventListener('click', async () => {
+    const t = screenTuner;
+    const out =
+`screen_name: x=${t.name.x.toFixed(3)} y=${t.name.y.toFixed(3)} s=${t.name.scale.toFixed(2)} sx=${t.name.stretchX.toFixed(2)} sy=${t.name.stretchY.toFixed(2)} r=${t.name.rotate.toFixed(0)} flipX=${t.name.flipX} flipY=${t.name.flipY}
+screen_avatar: x=${t.avatar.x.toFixed(3)} y=${t.avatar.y.toFixed(3)} s=${t.avatar.scale.toFixed(2)} sx=${t.avatar.stretchX.toFixed(2)} sy=${t.avatar.stretchY.toFixed(2)} r=${t.avatar.rotate.toFixed(0)} flipX=${t.avatar.flipX} flipY=${t.avatar.flipY}
+screen_lid: x=${t.lid.x.toFixed(3)} y=${t.lid.y.toFixed(3)} s=${t.lid.scale.toFixed(2)} sx=${t.lid.stretchX.toFixed(2)} sy=${t.lid.stretchY.toFixed(2)} r=${t.lid.rotate.toFixed(0)} flipX=${t.lid.flipX} flipY=${t.lid.flipY}`;
+    try { await navigator.clipboard.writeText(out); } catch {}
+    console.log(out);
+    alert('Copied (also logged to console).');
+  });
+
+  const hide = () => { wrap.style.display = 'none'; };
+  const show = () => { wrap.style.display = ''; };
+  const toggle = () => { wrap.style.display = (wrap.style.display === 'none') ? '' : 'none'; };
+
+  $('tunerClose').addEventListener('click', hide);
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 't' || e.key === 'T') toggle();
+  });
+
+  document.body.appendChild(wrap);
+}
+
+mountScreenTunerUI();
 
 
 
