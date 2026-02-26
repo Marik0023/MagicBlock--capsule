@@ -1051,73 +1051,93 @@ loader.load(
     if (state.capsuleLid) state.capsuleGroup.add(state.capsuleLid.clone(false));
 
     // Screens
-    state.screens.lid = gltf.scene.getObjectByName('screen_lid');
-    state.screens.name = gltf.scene.getObjectByName('screen_name');
-    state.screens.avatar = gltf.scene.getObjectByName('screen_avatar');
+    // --- Знаходимо старі меші і ховаємо їх ---
+    const oldLid = gltf.scene.getObjectByName('screen_lid');
+    const oldName = gltf.scene.getObjectByName('screen_name');
+    const oldAvatar = gltf.scene.getObjectByName('screen_avatar');
+    if (oldLid) oldLid.visible = false;
+    if (oldName) oldName.visible = false;
+    if (oldAvatar) oldAvatar.visible = false;
 
-    // --- Screen parent correction + debug helpers ---
-    // Центруємо екрани по worldPos — рухаємо батьків поки worldPos.x != 0
-    // Підбираємо рівень батька який реально керує X позицією
-    setTimeout(() => {
-      // Знаходимо батька який реально несе X зміщення
-      // Піднімаємось по дереву і шукаємо вузол де worldPos.x != localPos.x без урахування батьків
-      const findAndCenter = (screenObj) => {
-        if (!screenObj) return;
+    // --- Знаходимо батьків для прив'язки нових екранів ---
+    // screen_lid — прив'язуємо до capsule_lid щоб рухався з кришкою
+    const lidParent = gltf.scene.getObjectByName('capsule_lid') || oldLid?.parent || gltf.scene;
+    // screen_name і screen_avatar — прив'язуємо до capsule_base
+    const baseParent = gltf.scene.getObjectByName('capsule_base') || oldName?.parent?.parent || gltf.scene;
 
-        // Спочатку скидаємо наші попередні зміщення на всіх рівнях
-        let node = screenObj.parent;
-        while (node) {
-          if (node._centeredByUs) {
-            node.position.x -= node._centerOffset;
-            node._centeredByUs = false;
-            node._centerOffset = 0;
-          }
-          node = node.parent;
-        }
-
-        // Тепер піднімаємось і шукаємо батька де можна вирівняти
-        // Стратегія: беремо worldPos меша, знаходимо батька найближчого до кореня
-        // у якого localPos.x відповідає за зміщення
-        const wp = new THREE.Vector3();
-        screenObj.getWorldPosition(wp);
-        const currentX = wp.x;
-        if (Math.abs(currentX) < 0.01) return; // вже по центру
-
-        // Шукаємо батька у якого localPos.x != 0 (він несе зміщення)
-        let candidate = screenObj.parent;
-        let deepest = null;
-        while (candidate) {
-          if (Math.abs(candidate.position.x) > 0.001) {
-            deepest = candidate;
-          }
-          candidate = candidate.parent;
-        }
-
-        // Якщо знайшли — зміщуємо його на -currentX
-        const target = deepest || screenObj.parent;
-        if (target) {
-          const offset = -currentX;
-          target.position.x += offset;
-          target._centeredByUs = true;
-          target._centerOffset = offset;
-        }
-      };
-
-      findAndCenter(state.screens.lid);
-      findAndCenter(state.screens.name);
-      findAndCenter(state.screens.avatar);
-
-      // Логуємо результат
-      ['lid','name','avatar'].forEach(k => {
-        const s = state.screens[k];
-        if (!s) return;
-        const wp = new THREE.Vector3();
-        s.getWorldPosition(wp);
-        console.info('[screen_' + k + '] after centering: worldPos x=' + wp.x.toFixed(4) + ', y=' + wp.y.toFixed(4) + ', z=' + wp.z.toFixed(4));
+    // --- Функція створення нового екрану ---
+    function makeScreenPlane(width, height, parent, localPos, localRot) {
+      const geo = new THREE.PlaneGeometry(width, height);
+      const mat = new THREE.MeshStandardMaterial({
+        color: 0x000000,
+        roughness: 0.1,
+        metalness: 0.3,
+        emissive: 0x000000,
+        emissiveIntensity: 1,
+        transparent: false,
+        depthWrite: true,
       });
-    }, 150);
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(localPos.x, localPos.y, localPos.z);
+      if (localRot) mesh.rotation.set(localRot.x || 0, localRot.y || 0, localRot.z || 0);
+      parent.add(mesh);
+      return mesh;
+    }
 
-    // Debug helpers — доступні в консолі браузера
+    // --- Рахуємо розміри боксу щоб правильно розмістити екрани ---
+    gltf.scene.updateWorldMatrix(true, true);
+    const capsuleBox = new THREE.Box3().setFromObject(gltf.scene);
+    const capsuleSize = capsuleBox.getSize(new THREE.Vector3());
+    const capsuleCenter = capsuleBox.getCenter(new THREE.Vector3());
+
+    // Ширина і висота боксу
+    const bW = capsuleSize.x; // ширина
+    const bH = capsuleSize.y; // висота  
+    const bD = capsuleSize.z; // глибина
+
+    console.info('[screens] capsule size:', bW.toFixed(3), bH.toFixed(3), bD.toFixed(3));
+    console.info('[screens] capsule center:', capsuleCenter.x.toFixed(3), capsuleCenter.y.toFixed(3), capsuleCenter.z.toFixed(3));
+
+    // Розміри екранів відносно боксу
+    const screenW = bW * 0.45;    // ширина name/avatar екрану
+    const screenH = bH * 0.15;    // висота name екрану
+    const avatarH = bH * 0.18;    // висота avatar екрану
+    const lidW = bW * 0.35;       // ширина lid екрану
+    const lidH = bH * 0.08;       // висота lid екрану
+
+    // Z-позиція фронтальних екранів (трохи перед поверхнею боксу)
+    const frontZ = capsuleSize.z * 0.5 + 0.01;
+
+    // Y-позиції для name і avatar на передній панелі
+    // Базова панель займає нижню половину боксу
+    const nameY  = capsuleCenter.y - bH * 0.05;   // трохи вище центру нижньої панелі
+    const avatarY = capsuleCenter.y - bH * 0.26;  // нижче name
+
+    // Нові меші екранів
+    state.screens.name = makeScreenPlane(
+      screenW, screenH,
+      baseParent,
+      { x: 0, y: nameY, z: frontZ },
+      { x: 0, y: 0, z: 0 }
+    );
+
+    state.screens.avatar = makeScreenPlane(
+      screenW, avatarH,
+      baseParent,
+      { x: 0, y: avatarY, z: frontZ },
+      { x: 0, y: 0, z: 0 }
+    );
+
+    // Lid екран — на кришці, горизонтальний
+    // Кришка знаходиться у верхній частині, тому Y відносно lidParent = невелике
+    state.screens.lid = makeScreenPlane(
+      lidW, lidH,
+      lidParent,
+      { x: 0, y: 0, z: 0 },  // центр батька кришки
+      { x: 0, y: 0, z: 0 }
+    );
+
+    // Debug helpers
     window._screens = state.screens;
     window._info = () => {
       ['lid','name','avatar'].forEach(k => {
@@ -1125,39 +1145,13 @@ loader.load(
         if (!s) return;
         const wp = new THREE.Vector3();
         s.getWorldPosition(wp);
-        const pp = new THREE.Vector3();
-        if (s.parent) s.parent.getWorldPosition(pp);
-        console.log(
-          'screen_' + k + '\n' +
-          '  parent     : ' + s.parent?.name + '\n' +
-          '  parent.pos : x=' + (s.parent?.position.x||0).toFixed(4) + ', y=' + (s.parent?.position.y||0).toFixed(4) + ', z=' + (s.parent?.position.z||0).toFixed(4) + '\n' +
-          '  worldPos   : x=' + wp.x.toFixed(4) + ', y=' + wp.y.toFixed(4) + ', z=' + wp.z.toFixed(4) + '\n' +
-          '  scale      : x=' + s.scale.x.toFixed(4) + ', y=' + s.scale.y.toFixed(4) + ', z=' + s.scale.z.toFixed(4)
-        );
+        console.log('screen_' + k + ' | worldPos: x=' + wp.x.toFixed(3) + ', y=' + wp.y.toFixed(3) + ', z=' + wp.z.toFixed(3) + ' | localPos: x=' + s.position.x.toFixed(3) + ', y=' + s.position.y.toFixed(3) + ', z=' + s.position.z.toFixed(3));
       });
     };
-    // Рухати батьківський об'єкт екрану
-    window._pmove = (key, dx, dy, dz) => {
-      dx = dx||0; dy = dy||0; dz = dz||0;
-      const p = state.screens[key]?.parent;
-      if (!p) return console.warn('no parent for:', key);
-      p.position.x += dx; p.position.y += dy; p.position.z += dz;
-      const wp = new THREE.Vector3();
-      state.screens[key].getWorldPosition(wp);
-      console.log('screen_' + key + ' worldPos -> x=' + wp.x.toFixed(4) + ', y=' + wp.y.toFixed(4) + ', z=' + wp.z.toFixed(4));
-    };
-    // Масштаб батьківського об'єкту
-    window._pscale = (key, val) => {
-      const p = state.screens[key]?.parent;
-      if (!p) return console.warn('no parent for:', key);
-      p.scale.setScalar(val);
-      console.log('screen_' + key + ' parent scale -> ' + val);
-    };
-    window._info2 = () => {
-      setTimeout(() => window._info(), 50);
-    };
+    window._move = (k, dx, dy, dz) => { const s=state.screens[k]; if(!s) return; s.position.x+=dx||0; s.position.y+=dy||0; s.position.z+=dz||0; window._info(); };
+    window._size = (k, w, h) => { const s=state.screens[k]; if(!s) return; s.geometry.dispose(); s.geometry=new THREE.PlaneGeometry(w,h); console.log('screen_'+k+' size ->',w,h); };
     setTimeout(() => window._info(), 300);
-    // --- End screen helpers ---
+    // --- End screen setup ---
 
     // Lid pose setup
     if (state.lidBone || state.lidControl) {
@@ -1365,28 +1359,15 @@ function easeOutCubic(t) {
 function applyTextureOrientation(tex, kind = 'default') {
   if (!tex) return tex;
 
-  // IMPORTANT: canvases applied to GLTF meshes must use flipY=false (same as glTF textures),
-  // otherwise text/icons appear upside-down on screen_* meshes.
-  tex.flipY = false;
-
+  // Нові програмні PlaneGeometry екрани мають стандартні UV (flipY=true, без rotation)
+  // Тому просто скидаємо всі трансформи
+  tex.flipY = true;
   tex.center.set(0.5, 0.5);
-  tex.rotation = -Math.PI / 2; // GLB screens in this model are UV-rotated 90deg
+  tex.rotation = 0;
   tex.wrapS = THREE.ClampToEdgeWrapping;
   tex.wrapT = THREE.ClampToEdgeWrapping;
   tex.repeat.set(1, 1);
   tex.offset.set(0, 0);
-
-  // Lid screen UV in this GLB is mirrored relative to side screens.
-  // IMPORTANT: negative repeat requires RepeatWrapping (with Clamp it can sample edge color -> blank screen on some GPUs).
-  if (kind === 'lid') {
-    // Lid screen UV is opposite to the side screens in this GLB.
-    // Use +90deg (instead of the shared -90deg) + Y mirror to keep the lid display upright.
-    tex.rotation = Math.PI / 2;
-    tex.wrapT = THREE.RepeatWrapping;
-    tex.repeat.y = -1;
-    tex.offset.y = 1;
-  }
-
   tex.needsUpdate = true;
   return tex;
 }
@@ -1723,10 +1704,7 @@ function drawLockGlyph(ctx, x, y, size, progressClosed) {
 }
 
 function drawLidScreenCanvas(ctx, w, h, time) {
-  // LID SCREEN: UV is mirrored horizontally, pre-flip canvas
   ctx.save();
-  ctx.translate(w, 0);
-  ctx.scale(-1, 1);
 
   // Background
   ctx.clearRect(0, 0, w, h);
@@ -2270,19 +2248,12 @@ function placeholderMaterial(label) {
 }
 
 function setupScreenPlaceholders() {
-  if (state.screens.lid?.isMesh) {
-    state.screens.lid.material = placeholderMaterial('LOCK');
-  }
-  if (state.screens.name?.isMesh) {
-    state.screens.name.material = placeholderMaterial('NAME');
-  }
-  if (state.screens.avatar?.isMesh) {
-    state.screens.avatar.material = placeholderMaterial('AVATAR');
-  }
-
+  // Нові програмні екрани — просто застосовуємо чорний матеріал як плейсхолдер
+  // Реальний рендер відбувається через renderDynamicScreens()
   ['lid','name','avatar'].forEach((k) => {
-    const m = state.screens[k]?.material;
-    if (m?.map) applyTextureOrientation(m.map, k);
+    const s = state.screens[k];
+    if (!s?.isMesh) return;
+    // Не змінюємо матеріал тут — renderDynamicScreens призначить canvas текстуру
   });
 }
 
