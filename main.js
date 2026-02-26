@@ -1688,18 +1688,23 @@ const dv = (maxV - minV) || 1;
     } else {
       // Side screens: -90° (standard for this export)
       orient = rotAround(-Math.PI / 2);
-
-      // Requested: screen_name + screen_avatar are mirrored on this model
-      // so we flip both axes to make the content appear upright and centered.
-      if (kind === 'name' || kind === 'avatar') {
-        const flipXY = new THREE.Matrix3();
-        flipXY.set(-1, 0, 1, 0, -1, 1, 0, 0, 1);
-        orient = flipXY.multiply(orient);
-      }
     }
 
-    // Final: orient * bounds
-    mesh.userData[cacheKey] = orient.multiply(bounds);
+    // Final: orient * bounds (and optional per-screen flips)
+    const base = new THREE.Matrix3();
+    base.copy(orient).multiply(bounds);
+
+    // For this model, screen_name and screen_avatar appear mirrored/upside-down.
+    // Apply a 180° UV flip: (u,v) -> (1-u, 1-v). This stays inside [0..1] so ClampToEdge is safe.
+    if (kind === 'name' || kind === 'avatar') {
+      const flipXY = new THREE.Matrix3();
+      flipXY.set(-1, 0, 1, 0, -1, 1, 0, 0, 1);
+      const out = new THREE.Matrix3();
+      out.multiplyMatrices(flipXY, base); // out = flipXY * base
+      mesh.userData[cacheKey] = out;
+    } else {
+      mesh.userData[cacheKey] = base;
+    }
   }
 
   tex.flipY = false;
@@ -2193,11 +2198,10 @@ function drawNameScreenCanvas(ctx, w, h, time) {
   ctx.shadowBlur = 16;
   ctx.fillStyle = nameGrad;
   ctx.font = `800 ${Math.round(size * pulse)}px Inter, sans-serif`;
-  // Requested: move nickname slightly down + stretch a bit for this screen
-  const nameY = h * 0.60;
+  const nameY = h * 0.62;
   ctx.save();
   ctx.translate(w / 2, nameY);
-  ctx.scale(1.14, 1.02); // a bit wider + tiny vertical stretch
+  ctx.scale(1.12, 1.0); // slight horizontal stretch
   ctx.fillText(nick, 0, 0);
   ctx.restore();
 
@@ -2252,11 +2256,11 @@ function drawAvatarScreenCanvas(ctx, w, h, time) {
     ctx.fillRect(innerX, innerY, innerW, innerH);
 
     // 3) Foreground avatar "contain" (NO cropping) — always centered
-    const containScale = Math.min(innerW / img.width, innerH / img.height) * 0.88 * (1.0 + Math.sin(time * 1.4) * 0.006);
+    const containScale = Math.min(innerW / img.width, innerH / img.height) * 0.90 * (1.0 + Math.sin(time * 1.4) * 0.006); // slightly smaller
     const dW = img.width * containScale;
     const dH = img.height * containScale;
     const dX = innerX + (innerW - dW) / 2 + floatX;
-    const dY = innerY + (innerH - dH) / 2 + floatY - innerH * 0.06;
+    const dY = innerY + (innerH - dH) / 2 + floatY - innerH * 0.06; // lift a bit
     ctx.drawImage(img, dX, dY, dW, dH);
   } else {
     const ph = ctx.createLinearGradient(innerX, innerY, innerX + innerW, innerY + innerH);
