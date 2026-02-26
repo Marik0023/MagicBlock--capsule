@@ -31,6 +31,153 @@ const ui = {
 };
 
 
+// === SCREEN TUNER (debug controls for aligning on-model screens) ===
+// Values are normalized: x/y are in screen widths/heights (-0.40..0.40).
+const screenTuner = {
+  name:   { x: 0.00, y: 0.00, scale: 1.00, flipX: false, flipY: false },
+  avatar: { x: 0.00, y: 0.00, scale: 0.82, flipX: false, flipY: false },
+  lid:    { x: 0.00, y: 0.00, scale: 1.00, flipX: false, flipY: false },
+};
+
+function mountScreenTunerUI() {
+  // Don't mount twice
+  if (document.getElementById('screenTuner')) return;
+
+  const wrap = document.createElement('div');
+  wrap.id = 'screenTuner';
+  wrap.style.cssText = `
+    position:fixed; top:12px; right:12px; z-index:99999;
+    width:280px; padding:10px 10px 8px;
+    background:rgba(0,0,0,.58); color:#fff;
+    font:12px/1.25 system-ui, -apple-system, Segoe UI, Roboto, Arial;
+    border:1px solid rgba(255,255,255,.18); border-radius:12px;
+    backdrop-filter: blur(8px);
+    user-select:none;
+  `;
+
+  const row = (label, id, min, max, step, value) => `
+    <label style="display:flex; gap:8px; align-items:center; margin:4px 0;">
+      <span style="width:46px; opacity:.9;">${label}</span>
+      <input id="${id}" type="range" min="${min}" max="${max}" step="${step}" value="${value}" style="width:100%;">
+    </label>
+  `;
+  const flipRow = (prefix, label) => `
+    <div style="display:flex; gap:10px; align-items:center; margin:2px 0 8px;">
+      <span style="width:80px; opacity:.9; font-weight:600;">${label}</span>
+      <label style="display:flex; gap:6px; align-items:center; opacity:.9;">
+        <input id="${prefix}FlipX" type="checkbox"> Flip X
+      </label>
+      <label style="display:flex; gap:6px; align-items:center; opacity:.9;">
+        <input id="${prefix}FlipY" type="checkbox"> Flip Y
+      </label>
+    </div>
+  `;
+
+  wrap.innerHTML = `
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+      <div style="font-weight:800;">Screen Tuner</div>
+      <button id="stHide" style="border:1px solid rgba(255,255,255,.22); background:rgba(255,255,255,.08); color:#fff; border-radius:10px; padding:6px 10px; cursor:pointer;">Hide</button>
+    </div>
+
+    <div style="opacity:.92; font-weight:700; margin:6px 0 4px;">screen_name</div>
+    ${row('X', 'nX', -0.40, 0.40, 0.005, 0)}
+    ${row('Y', 'nY', -0.40, 0.40, 0.005, 0)}
+    ${row('Scale', 'nS', 0.70, 1.40, 0.01, 1.00)}
+    ${flipRow('n', 'Flip')}
+    <div id="nVal" style="opacity:.85; margin:2px 0 8px;"></div>
+
+    <div style="opacity:.92; font-weight:700; margin:6px 0 4px;">screen_avatar</div>
+    ${row('X', 'aX', -0.40, 0.40, 0.005, 0)}
+    ${row('Y', 'aY', -0.40, 0.40, 0.005, 0)}
+    ${row('Scale', 'aS', 0.50, 1.10, 0.01, 0.82)}
+    ${flipRow('a', 'Flip')}
+    <div id="aVal" style="opacity:.85; margin:2px 0 8px;"></div>
+
+    <div style="opacity:.92; font-weight:700; margin:6px 0 4px;">screen_lid</div>
+    ${row('X', 'lX', -0.40, 0.40, 0.005, 0)}
+    ${row('Y', 'lY', -0.40, 0.40, 0.005, 0)}
+    ${row('Scale', 'lS', 0.70, 1.40, 0.01, 1.00)}
+    ${flipRow('l', 'Flip')}
+    <div id="lVal" style="opacity:.85; margin:2px 0 10px;"></div>
+
+    <button id="copyTuners" style="
+      width:100%; padding:8px 10px; border-radius:10px;
+      border:1px solid rgba(255,255,255,.22);
+      background:rgba(255,255,255,.08); color:#fff; cursor:pointer;
+    ">Copy values</button>
+
+    <div style="opacity:.6; margin-top:8px;">Tip: press <b>T</b> to toggle panel</div>
+  `;
+
+  const $ = (id) => wrap.querySelector(`#${id}`);
+
+  const update = () => {
+    screenTuner.name.x = parseFloat($('nX').value);
+    screenTuner.name.y = parseFloat($('nY').value);
+    screenTuner.name.scale = parseFloat($('nS').value);
+    screenTuner.name.flipX = $('nFlipX').checked;
+    screenTuner.name.flipY = $('nFlipY').checked;
+
+    screenTuner.avatar.x = parseFloat($('aX').value);
+    screenTuner.avatar.y = parseFloat($('aY').value);
+    screenTuner.avatar.scale = parseFloat($('aS').value);
+    screenTuner.avatar.flipX = $('aFlipX').checked;
+    screenTuner.avatar.flipY = $('aFlipY').checked;
+
+    screenTuner.lid.x = parseFloat($('lX').value);
+    screenTuner.lid.y = parseFloat($('lY').value);
+    screenTuner.lid.scale = parseFloat($('lS').value);
+    screenTuner.lid.flipX = $('lFlipX').checked;
+    screenTuner.lid.flipY = $('lFlipY').checked;
+
+    $('nVal').textContent =
+      `x=${screenTuner.name.x.toFixed(3)}  y=${screenTuner.name.y.toFixed(3)}  s=${screenTuner.name.scale.toFixed(2)}  flipX=${screenTuner.name.flipX}  flipY=${screenTuner.name.flipY}`;
+    $('aVal').textContent =
+      `x=${screenTuner.avatar.x.toFixed(3)}  y=${screenTuner.avatar.y.toFixed(3)}  s=${screenTuner.avatar.scale.toFixed(2)}  flipX=${screenTuner.avatar.flipX}  flipY=${screenTuner.avatar.flipY}`;
+    $('lVal').textContent =
+      `x=${screenTuner.lid.x.toFixed(3)}  y=${screenTuner.lid.y.toFixed(3)}  s=${screenTuner.lid.scale.toFixed(2)}  flipX=${screenTuner.lid.flipX}  flipY=${screenTuner.lid.flipY}`;
+
+    // Force redraw next frame
+    state.lastScreenFxDraw = 0;
+  };
+
+  // seed checkbox defaults
+  $('nFlipX').checked = screenTuner.name.flipX;
+  $('nFlipY').checked = screenTuner.name.flipY;
+  $('aFlipX').checked = screenTuner.avatar.flipX;
+  $('aFlipY').checked = screenTuner.avatar.flipY;
+  $('lFlipX').checked = screenTuner.lid.flipX;
+  $('lFlipY').checked = screenTuner.lid.flipY;
+
+  wrap.querySelectorAll('input').forEach((inp) => inp.addEventListener('input', update));
+  wrap.querySelectorAll('input[type="checkbox"]').forEach((inp) => inp.addEventListener('change', update));
+
+  $('copyTuners').addEventListener('click', async () => {
+    const text =
+`screen_name:  x=${screenTuner.name.x.toFixed(3)}, y=${screenTuner.name.y.toFixed(3)}, scale=${screenTuner.name.scale.toFixed(2)}, flipX=${screenTuner.name.flipX}, flipY=${screenTuner.name.flipY}
+screen_avatar: x=${screenTuner.avatar.x.toFixed(3)}, y=${screenTuner.avatar.y.toFixed(3)}, scale=${screenTuner.avatar.scale.toFixed(2)}, flipX=${screenTuner.avatar.flipX}, flipY=${screenTuner.avatar.flipY}
+screen_lid:    x=${screenTuner.lid.x.toFixed(3)}, y=${screenTuner.lid.y.toFixed(3)}, scale=${screenTuner.lid.scale.toFixed(2)}, flipX=${screenTuner.lid.flipX}, flipY=${screenTuner.lid.flipY}`;
+    try { await navigator.clipboard.writeText(text); } catch {}
+    console.log(text);
+    alert('Copied (also logged in console).');
+  });
+
+  $('stHide').addEventListener('click', () => wrap.remove());
+
+  document.body.appendChild(wrap);
+  update();
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key && e.key.toLowerCase() === 't') {
+    const ex = document.getElementById('screenTuner');
+    if (ex) ex.remove();
+    else mountScreenTunerUI();
+  }
+});
+
+
+
 const SUPABASE_URL = 'https://dzamfjphmomvkepirxoh.supabase.co';
 const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_S05m0mHe9SnvWeoU9MZmVA_qZl-K6Q8';
 const CAPSULE_BUCKET = 'capsule-public';
@@ -1693,6 +1840,19 @@ const dv = (maxV - minV) || 1;
       orient = rotAround(-Math.PI / 2);
     }
 
+    // Optional user-controlled UV flips (debug tuner)
+    const t = (kind === 'lid') ? screenTuner.lid : (kind === 'name') ? screenTuner.name : (kind === 'avatar') ? screenTuner.avatar : null;
+    if (t?.flipX) {
+      const fx = new THREE.Matrix3();
+      fx.set(-1, 0, 1,  0, 1, 0,  0, 0, 1);
+      orient = fx.multiply(orient);
+    }
+    if (t?.flipY) {
+      const fy = new THREE.Matrix3();
+      fy.set(1, 0, 0,  0, -1, 1,  0, 0, 1);
+      orient = fy.multiply(orient);
+    }
+
     // Final: orient * bounds
     mesh.userData[cacheKey] = orient.multiply(bounds);
   }
@@ -2080,6 +2240,16 @@ function drawLidScreenCanvas(ctx, w, h, time) {
     inner: 'rgba(7,11,17,0.96)',
   });
 
+  // Apply tuner transform (move/scale UI inside lid screen)
+  const ldx = (screenTuner.lid.x || 0) * w;
+  const ldy = (screenTuner.lid.y || 0) * h;
+  const lsc = (screenTuner.lid.scale || 1);
+  ctx.save();
+  ctx.translate(w * 0.5 + ldx, h * 0.5 + ldy);
+  ctx.scale(lsc, lsc);
+  ctx.translate(-w * 0.5, -h * 0.5);
+
+
   const closeP = 1 - clamp01(state.lidAnimT);
   const sealP = state.sealAnimPlaying ? easeOutCubic(closeP) : (state.sealed ? 1 : 0);
 
@@ -2140,6 +2310,7 @@ function drawLidScreenCanvas(ctx, w, h, time) {
   ctx.fillStyle = sweep;
   ctx.fillRect(barX, barY, barW, barH);
   ctx.restore();
+  ctx.restore();
 }
 
 
@@ -2187,8 +2358,14 @@ function drawNameScreenCanvas(ctx, w, h, time) {
   ctx.shadowColor = 'rgba(118,220,255,0.28)';
   ctx.shadowBlur = 16;
   ctx.fillStyle = nameGrad;
-  ctx.font = `800 ${Math.round(size * pulse)}px Inter, sans-serif`;
-  ctx.fillText(nick, w / 2, h / 2);
+  ctx.font = `800 ${Math.round(size * pulse * (screenTuner.name.scale || 1))}px Inter, sans-serif`;
+  const nx = w * 0.5 + (screenTuner.name.x || 0) * w;
+  const ny = h * 0.5 + (screenTuner.name.y || 0) * h;
+  // subtle outline to keep text readable
+  ctx.lineWidth = Math.max(4, Math.round((Math.round(size * pulse) / 20)));
+  ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+  ctx.strokeText(nick, nx, ny);
+  ctx.fillText(nick, nx, ny);
 
   ctx.shadowBlur = 0;
 }
@@ -2241,11 +2418,13 @@ function drawAvatarScreenCanvas(ctx, w, h, time) {
     ctx.fillRect(innerX, innerY, innerW, innerH);
 
     // 3) Foreground avatar "contain" (NO cropping) — always centered
-    const containScale = Math.min(innerW / img.width, innerH / img.height) * 0.82 * (1.0 + Math.sin(time * 1.4) * 0.004);
+    const containScale = Math.min(innerW / img.width, innerH / img.height)
+      * 0.82 * (screenTuner.avatar.scale || 1)
+      * (1.0 + Math.sin(time * 1.4) * 0.004);
     const dW = img.width * containScale;
     const dH = img.height * containScale;
-    const dX = innerX + (innerW - dW) / 2 + floatX;
-    const dY = innerY + (innerH - dH) / 2 + floatY - innerH * 0.10;
+    const dX = innerX + (innerW - dW) / 2 + floatX + (screenTuner.avatar.x || 0) * innerW;
+    const dY = innerY + (innerH - dH) / 2 + floatY + (screenTuner.avatar.y || 0) * innerH - innerH * 0.10;
     ctx.drawImage(img, dX, dY, dW, dH);
   } else {
     const ph = ctx.createLinearGradient(innerX, innerY, innerX + innerW, innerY + innerH);
@@ -3381,5 +3560,6 @@ function tick() {
   requestAnimationFrame(tick);
 }
 
+mountScreenTunerUI();
 resize();
 tick();
