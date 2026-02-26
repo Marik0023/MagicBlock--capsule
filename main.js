@@ -1685,8 +1685,12 @@ const dv = (maxV - minV) || 1;
       const flipY = new THREE.Matrix3();
       flipY.set(1, 0, 0, 0, -1, 1, 0, 0, 1);
       orient = flipY.multiply(rotAround(Math.PI / 2));
+    } else if (kind === 'name') {
+      // IMPORTANT: screen_name in this GLB is already oriented correctly.
+      // Rotating it (-90°) makes the nickname look like vertical stripes / clipped.
+      orient = rotAround(0);
     } else {
-      // Side screens: -90° (standard for this export)
+      // Side screens (avatar/logo): -90° (standard for this export)
       orient = rotAround(-Math.PI / 2);
     }
 
@@ -2182,9 +2186,9 @@ function drawNameScreenCanvas(ctx, w, h, time) {
   ctx.restore();
 
   // Centered nickname (auto-size)
-  let size = 92;
-  if (nick.length > 14) size = 72;
-  if (nick.length > 18) size = 58;
+  let size = 78;
+  if (nick.length > 14) size = 64;
+  if (nick.length > 18) size = 54;
 
   const pulse = 0.98 + Math.sin(time * 3.4) * 0.02;
   const nameGrad = ctx.createLinearGradient(0, 0, w, 0);
@@ -2262,11 +2266,11 @@ function drawAvatarScreenCanvas(ctx, w, h, time) {
     ctx.fillRect(innerX, innerY, innerW, innerH);
 
     // 3) Foreground avatar "contain" (NO cropping) — always centered
-    const containScale = Math.min(innerW / img.width, innerH / img.height) * 0.78 * (1.0 + Math.sin(time * 1.4) * 0.004); // slightly smaller
+    const containScale = Math.min(innerW / img.width, innerH / img.height) * 0.70 * (1.0 + Math.sin(time * 1.4) * 0.004); // smaller so the head fits comfortably
     const dW = img.width * containScale;
     const dH = img.height * containScale;
     const dX = innerX + (innerW - dW) / 2 + floatX;
-    const dY = innerY + (innerH - dH) / 2 + floatY - innerH * 0.20; // lift more so the head sits centered
+    const dY = innerY + (innerH - dH) / 2 + floatY - innerH * 0.12; // slight lift so the head stays centered
     ctx.drawImage(img, dX, dY, dW, dH);
   } else {
     const ph = ctx.createLinearGradient(innerX, innerY, innerX + innerW, innerY + innerH);
