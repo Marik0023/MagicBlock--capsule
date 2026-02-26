@@ -89,6 +89,11 @@ const state = {
   avatarImgLoaded: false,
   logoImgEl: null,
   logoImgLoaded: false,
+  // screen_logo glitch timing (seconds)
+  logoGlitchNext: 0,
+  logoGlitchUntil: 0,
+  logoGlitchFlip: false,
+  logoGlitchActive: false,
   lastScreenFxDraw: 0,
 
   // message letter prop (flies into capsule during sealing)
@@ -106,6 +111,10 @@ const state = {
 
 const MIN_MESSAGE_CHARS = 10;
 const CAPSULE_STORAGE_KEY = 'magicblock_time_capsule_state_v1';
+
+function rr(min, max) {
+  return min + Math.random() * (max - min);
+}
 
 function getTrimmedMessageLength(value = state.message) {
   return Array.from(String(value || '').trim()).length;
@@ -1902,6 +1911,15 @@ function drawAvatarScreenCanvas(ctx, w, h, time) {
 
 
 function drawLogoScreenCanvas(ctx, w, h, time) {
+  // schedule a short "comic" glitch burst about every ~3 seconds
+  if (!state.logoGlitchNext) state.logoGlitchNext = time + 3.0;
+  if (time >= state.logoGlitchNext && time >= state.logoGlitchUntil) {
+    state.logoGlitchUntil = time + rr(0.12, 0.22);
+    state.logoGlitchNext = time + rr(2.6, 3.6);
+    state.logoGlitchFlip = Math.random() < 0.25;
+  }
+  const glitchOn = time < state.logoGlitchUntil;
+  state.logoGlitchActive = glitchOn;
   drawScreenGlassBg(ctx, w, h, {
     radius: 52,
     border: 3,
@@ -1989,7 +2007,47 @@ function drawLogoScreenCanvas(ctx, w, h, time) {
 
     ctx.shadowColor = 'rgba(130,220,255,0.38)';
     ctx.shadowBlur = 22;
-    ctx.drawImage(img, dx, dy, dw, dh);
+
+    if (!glitchOn) {
+      ctx.drawImage(img, dx, dy, dw, dh);
+    } else {
+      // base draw with jitter (+ optional flip) for a quick comic glitch
+      const jx = rr(-18, 18);
+      const jy = rr(-10, 10);
+      ctx.save();
+      ctx.translate(dx + dw / 2, dy + dh / 2);
+      ctx.scale(state.logoGlitchFlip ? -1 : 1, 1);
+      ctx.globalAlpha = rr(0.70, 1.0);
+      ctx.drawImage(img, -dw / 2 + jx, -dh / 2 + jy, dw, dh);
+      ctx.restore();
+
+      // a few horizontal slice shifts
+      const iw2 = iw;
+      const ih2 = ih;
+      for (let s = 0; s < 3; s++) {
+        const sliceY = rr(0, dh);
+        const sliceH = rr(dh * 0.06, dh * 0.16);
+        const shiftX = rr(-26, 26);
+
+        const srcY = (sliceY / dh) * ih2;
+        const srcH = (sliceH / dh) * ih2;
+
+        ctx.globalAlpha = rr(0.35, 0.85);
+        ctx.drawImage(
+          img,
+          0,
+          srcY,
+          iw2,
+          srcH,
+          dx + shiftX,
+          dy + sliceY,
+          dw,
+          sliceH
+        );
+      }
+      ctx.globalAlpha = 0.98;
+    }
+
     ctx.shadowBlur = 0;
     ctx.globalAlpha = 1;
   } else {
@@ -2069,7 +2127,7 @@ function renderDynamicScreens(force = false) {
     if (!(state.screens.logo.material && state.screens.logo.material.map === pack.tex)) {
       state.screens.logo.material = createScreenMaterial(pack.tex, 0x081427, 0.62);
     }
-    state.screens.logo.material.emissiveIntensity = 0.56 + Math.sin(now * 3.4 + 1.2) * 0.05;
+    state.screens.logo.material.emissiveIntensity = (0.56 + Math.sin(now * 3.4 + 1.2) * 0.05) + (state.logoGlitchActive ? 0.22 : 0);
   }
 }
 
