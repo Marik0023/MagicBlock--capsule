@@ -1055,44 +1055,54 @@ loader.load(
     state.screens.name = gltf.scene.getObjectByName('screen_name');
     state.screens.avatar = gltf.scene.getObjectByName('screen_avatar');
 
-    // --- Screen position/scale corrections (adjust after GLB redesign) ---
-    // Log current transforms so we can fine-tune values in the console
-    ['lid', 'name', 'avatar'].forEach(k => {
-      const s = state.screens[k];
-      if (s) {
+    // --- Screen debug helpers (accessible from browser console) ---
+    window._screens = state.screens;
+
+    // Usage from console:
+    //   _info()                      -> показати поточні позиції/scale
+    //   _move('avatar', 0.1, 0, 0)   -> зсунути avatar по X
+    //   _scale('avatar', 0.8)        -> змінити scale avatar
+    //   _setPos('avatar', x, y, z)   -> встановити позицію
+    window._info = () => {
+      ['lid','name','avatar'].forEach(k => {
+        const s = state.screens[k];
+        if (!s) return;
         const wp = new THREE.Vector3();
         s.getWorldPosition(wp);
-        console.info(`[screen_${k}] worldPos=`, wp, ' localPos=', s.position.clone(), ' scale=', s.scale.clone());
-      }
-    });
+        console.log(
+          'screen_' + k + '\n' +
+          '  parent : ' + s.parent?.name + '\n' +
+          '  localPos: x=' + s.position.x.toFixed(4) + ', y=' + s.position.y.toFixed(4) + ', z=' + s.position.z.toFixed(4) + '\n' +
+          '  worldPos: x=' + wp.x.toFixed(4) + ', y=' + wp.y.toFixed(4) + ', z=' + wp.z.toFixed(4) + '\n' +
+          '  scale   : x=' + s.scale.x.toFixed(4) + ', y=' + s.scale.y.toFixed(4) + ', z=' + s.scale.z.toFixed(4)
+        );
+      });
+    };
+    window._move = (key, dx, dy, dz) => {
+      dx = dx || 0; dy = dy || 0; dz = dz || 0;
+      const s = state.screens[key];
+      if (!s) return console.warn('no screen:', key);
+      s.position.x += dx;
+      s.position.y += dy;
+      s.position.z += dz;
+      console.log('screen_' + key + ' pos -> x=' + s.position.x.toFixed(4) + ', y=' + s.position.y.toFixed(4) + ', z=' + s.position.z.toFixed(4));
+    };
+    window._scale = (key, val) => {
+      const s = state.screens[key];
+      if (!s) return console.warn('no screen:', key);
+      s.scale.setScalar(val);
+      console.log('screen_' + key + ' scale -> ' + val);
+    };
+    window._setPos = (key, x, y, z) => {
+      const s = state.screens[key];
+      if (!s) return console.warn('no screen:', key);
+      s.position.set(x, y, z);
+      console.log('screen_' + key + ' pos set -> x=' + x + ', y=' + y + ', z=' + z);
+    };
 
-    // screen_avatar: зменшити і центрувати
-    if (state.screens.avatar) {
-      const av = state.screens.avatar;
-      av.scale.multiplyScalar(0.65);           // зменшити (підбери: 0.5–0.8)
-      av.position.x += 0.0;                   // зсув по X (+ = вправо)
-      av.position.y += 0.0;                   // зсув по Y (+ = вгору)
-      av.position.z += 0.0;                   // зсув по Z
-    }
-
-    // screen_name: зменшити і центрувати
-    if (state.screens.name) {
-      const nm = state.screens.name;
-      nm.scale.multiplyScalar(0.65);           // зменшити (підбери: 0.5–0.8)
-      nm.position.x += 0.0;
-      nm.position.y += 0.0;
-      nm.position.z += 0.0;
-    }
-
-    // screen_lid: зменшити і центрувати
-    if (state.screens.lid) {
-      const ld = state.screens.lid;
-      ld.scale.multiplyScalar(0.65);           // зменшити (підбери: 0.5–0.8)
-      ld.position.x += 0.0;
-      ld.position.y += 0.0;
-      ld.position.z += 0.0;
-    }
-    // --- End screen corrections ---
+    // Виклик одразу щоб побачити стартові значення
+    setTimeout(() => window._info(), 500);
+    // --- End screen debug helpers ---
 
     // Lid pose setup
     if (state.lidBone || state.lidControl) {
