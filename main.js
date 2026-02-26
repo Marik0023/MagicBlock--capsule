@@ -34,12 +34,14 @@ const ui = {
 // === SCREEN TUNER (debug controls for aligning on-model screens) ===
 // Values are normalized: x/y are in screen widths/heights (-0.40..0.40).
 const screenTuner = {
-  name:   { x: 0.00, y: 0.00, scale: 1.00, stretchX: 1.00, stretchY: 1.00, flipX: false, flipY: false },
-  avatar: { x: 0.00, y: 0.00, scale: 0.82, stretchX: 1.00, stretchY: 1.00, flipX: false, flipY: false },
-  lid:    { x: 0.00, y: 0.00, scale: 1.00, stretchX: 1.00, stretchY: 1.00, flipX: false, flipY: false },
+  // x/y are in screen fraction (-1..1), scale/stretch are multipliers, rotate is in degrees
+  name:   { x: 0.00, y: 0.00, scale: 1.00, stretchX: 1.00, stretchY: 1.00, rotate: 0, flipX: false, flipY: false },
+  avatar: { x: 0.00, y: 0.00, scale: 0.82, stretchX: 1.00, stretchY: 1.00, rotate: 0, flipX: false, flipY: false },
+  lid:    { x: 0.00, y: 0.00, scale: 1.00, stretchX: 1.00, stretchY: 1.00, rotate: 0, flipX: false, flipY: false },
 };
 
 function mountScreenTunerUI() {
+  window.__SCREEN_TUNER_DYNAMIC = true;
   // Don't mount twice
   if (document.getElementById('screenTuner')) return;
 
@@ -85,6 +87,7 @@ function mountScreenTunerUI() {
     ${row('Scale', 'nS', 0.20, 2.00, 0.01, 1.00)}
     ${row('StrX', 'nSX', 0.50, 1.80, 0.01, 1.00)}
     ${row('StrY', 'nSY', 0.50, 1.80, 0.01, 1.00)}
+    ${row('Rot', 'nR', -180, 180, 1, 0)}
     ${flipRow('n', 'Flip')}
     <div id="nVal" style="opacity:.85; margin:2px 0 8px;"></div>
 
@@ -94,6 +97,7 @@ function mountScreenTunerUI() {
     ${row('Scale', 'aS', 0.20, 2.00, 0.01, 0.82)}
     ${row('StrX', 'aSX', 0.50, 1.80, 0.01, 1.00)}
     ${row('StrY', 'aSY', 0.50, 1.80, 0.01, 1.00)}
+    ${row('Rot', 'aR', -180, 180, 1, 0)}
     ${flipRow('a', 'Flip')}
     <div id="aVal" style="opacity:.85; margin:2px 0 8px;"></div>
 
@@ -103,6 +107,7 @@ function mountScreenTunerUI() {
     ${row('Scale', 'lS', 0.20, 2.00, 0.01, 1.00)}
     ${row('StrX', 'lSX', 0.50, 1.80, 0.01, 1.00)}
     ${row('StrY', 'lSY', 0.50, 1.80, 0.01, 1.00)}
+    ${row('Rot', 'lR', -180, 180, 1, 0)}
     ${flipRow('l', 'Flip')}
     <div id="lVal" style="opacity:.85; margin:2px 0 10px;"></div>
 
@@ -123,6 +128,7 @@ function mountScreenTunerUI() {
     screenTuner.name.scale = parseFloat($('nS').value);
     screenTuner.name.stretchX = parseFloat($('nSX').value);
     screenTuner.name.stretchY = parseFloat($('nSY').value);
+    screenTuner.name.rotate = parseFloat($('nR').value);
     screenTuner.name.flipX = $('nFlipX').checked;
     screenTuner.name.flipY = $('nFlipY').checked;
 
@@ -131,6 +137,7 @@ function mountScreenTunerUI() {
     screenTuner.avatar.scale = parseFloat($('aS').value);
     screenTuner.avatar.stretchX = parseFloat($('aSX').value);
     screenTuner.avatar.stretchY = parseFloat($('aSY').value);
+    screenTuner.avatar.rotate = parseFloat($('aR').value);
     screenTuner.avatar.flipX = $('aFlipX').checked;
     screenTuner.avatar.flipY = $('aFlipY').checked;
 
@@ -139,15 +146,16 @@ function mountScreenTunerUI() {
     screenTuner.lid.scale = parseFloat($('lS').value);
     screenTuner.lid.stretchX = parseFloat($('lSX').value);
     screenTuner.lid.stretchY = parseFloat($('lSY').value);
+    screenTuner.lid.rotate = parseFloat($('lR').value);
     screenTuner.lid.flipX = $('lFlipX').checked;
     screenTuner.lid.flipY = $('lFlipY').checked;
 
     $('nVal').textContent =
-      `x=${screenTuner.name.x.toFixed(3)}  y=${screenTuner.name.y.toFixed(3)}  s=${screenTuner.name.scale.toFixed(2)}  sx=${screenTuner.name.stretchX.toFixed(2)}  sy=${screenTuner.name.stretchY.toFixed(2)}  flipX=${screenTuner.name.flipX}  flipY=${screenTuner.name.flipY}`;
+      `x=${screenTuner.name.x.toFixed(3)}  y=${screenTuner.name.y.toFixed(3)}  s=${screenTuner.name.scale.toFixed(2)}  sx=${screenTuner.name.stretchX.toFixed(2)}  sy=${screenTuner.name.stretchY.toFixed(2)}  r=${screenTuner.name.rotate.toFixed(0)}°  flipX=${screenTuner.name.flipX}  flipY=${screenTuner.name.flipY}`;
     $('aVal').textContent =
-      `x=${screenTuner.avatar.x.toFixed(3)}  y=${screenTuner.avatar.y.toFixed(3)}  s=${screenTuner.avatar.scale.toFixed(2)}  sx=${screenTuner.avatar.stretchX.toFixed(2)}  sy=${screenTuner.avatar.stretchY.toFixed(2)}  flipX=${screenTuner.avatar.flipX}  flipY=${screenTuner.avatar.flipY}`;
+      `x=${screenTuner.avatar.x.toFixed(3)}  y=${screenTuner.avatar.y.toFixed(3)}  s=${screenTuner.avatar.scale.toFixed(2)}  sx=${screenTuner.avatar.stretchX.toFixed(2)}  sy=${screenTuner.avatar.stretchY.toFixed(2)}  r=${screenTuner.avatar.rotate.toFixed(0)}°  flipX=${screenTuner.avatar.flipX}  flipY=${screenTuner.avatar.flipY}`;
     $('lVal').textContent =
-      `x=${screenTuner.lid.x.toFixed(3)}  y=${screenTuner.lid.y.toFixed(3)}  s=${screenTuner.lid.scale.toFixed(2)}  sx=${screenTuner.lid.stretchX.toFixed(2)}  sy=${screenTuner.lid.stretchY.toFixed(2)}  flipX=${screenTuner.lid.flipX}  flipY=${screenTuner.lid.flipY}`;
+      `x=${screenTuner.lid.x.toFixed(3)}  y=${screenTuner.lid.y.toFixed(3)}  s=${screenTuner.lid.scale.toFixed(2)}  sx=${screenTuner.lid.stretchX.toFixed(2)}  sy=${screenTuner.lid.stretchY.toFixed(2)}  r=${screenTuner.lid.rotate.toFixed(0)}°  flipX=${screenTuner.lid.flipX}  flipY=${screenTuner.lid.flipY}`;
 
     // Force redraw next frame
     state.lastScreenFxDraw = 0;
@@ -156,19 +164,22 @@ function mountScreenTunerUI() {
   // seed checkbox defaults
   $('nFlipX').checked = screenTuner.name.flipX;
   $('nFlipY').checked = screenTuner.name.flipY;
+  $('nR').value = screenTuner.name.rotate;
   $('aFlipX').checked = screenTuner.avatar.flipX;
   $('aFlipY').checked = screenTuner.avatar.flipY;
+  $('aR').value = screenTuner.avatar.rotate;
   $('lFlipX').checked = screenTuner.lid.flipX;
   $('lFlipY').checked = screenTuner.lid.flipY;
+  $('lR').value = screenTuner.lid.rotate;
 
   wrap.querySelectorAll('input').forEach((inp) => inp.addEventListener('input', update));
   wrap.querySelectorAll('input[type="checkbox"]').forEach((inp) => inp.addEventListener('change', update));
 
   $('copyTuners').addEventListener('click', async () => {
     const text =
-`screen_name:  x=${screenTuner.name.x.toFixed(3)}, y=${screenTuner.name.y.toFixed(3)}, scale=${screenTuner.name.scale.toFixed(2)}, stretchX=${screenTuner.name.stretchX.toFixed(2)}, stretchY=${screenTuner.name.stretchY.toFixed(2)}, flipX=${screenTuner.name.flipX}, flipY=${screenTuner.name.flipY}
-screen_avatar: x=${screenTuner.avatar.x.toFixed(3)}, y=${screenTuner.avatar.y.toFixed(3)}, scale=${screenTuner.avatar.scale.toFixed(2)}, stretchX=${screenTuner.avatar.stretchX.toFixed(2)}, stretchY=${screenTuner.avatar.stretchY.toFixed(2)}, flipX=${screenTuner.avatar.flipX}, flipY=${screenTuner.avatar.flipY}
-screen_lid:    x=${screenTuner.lid.x.toFixed(3)}, y=${screenTuner.lid.y.toFixed(3)}, scale=${screenTuner.lid.scale.toFixed(2)}, stretchX=${screenTuner.lid.stretchX.toFixed(2)}, stretchY=${screenTuner.lid.stretchY.toFixed(2)}, flipX=${screenTuner.lid.flipX}, flipY=${screenTuner.lid.flipY}`;
+`screen_name:  x=${screenTuner.name.x.toFixed(3)}, y=${screenTuner.name.y.toFixed(3)}, scale=${screenTuner.name.scale.toFixed(2)}, stretchX=${screenTuner.name.stretchX.toFixed(2)}, stretchY=${screenTuner.name.stretchY.toFixed(2)}, rotate=${screenTuner.name.rotate.toFixed(0)}, flipX=${screenTuner.name.flipX}, flipY=${screenTuner.name.flipY}
+screen_avatar: x=${screenTuner.avatar.x.toFixed(3)}, y=${screenTuner.avatar.y.toFixed(3)}, scale=${screenTuner.avatar.scale.toFixed(2)}, stretchX=${screenTuner.avatar.stretchX.toFixed(2)}, stretchY=${screenTuner.avatar.stretchY.toFixed(2)}, rotate=${screenTuner.avatar.rotate.toFixed(0)}, flipX=${screenTuner.avatar.flipX}, flipY=${screenTuner.avatar.flipY}
+screen_lid:    x=${screenTuner.lid.x.toFixed(3)}, y=${screenTuner.lid.y.toFixed(3)}, scale=${screenTuner.lid.scale.toFixed(2)}, stretchX=${screenTuner.lid.stretchX.toFixed(2)}, stretchY=${screenTuner.lid.stretchY.toFixed(2)}, rotate=${screenTuner.lid.rotate.toFixed(0)}, flipX=${screenTuner.lid.flipX}, flipY=${screenTuner.lid.flipY}`;
     try { await navigator.clipboard.writeText(text); } catch {}
     console.log(text);
     alert('Copied (also logged in console).');
@@ -1794,6 +1805,12 @@ function calibrateScreenTextureForMesh(mesh, tex, kind = 'side') {
   if (!uva || uvCount < 3) return;
 
   const cacheKey = `__screenTexMatrix_${kind}`;
+  const _tuner = (kind === 'lid') ? screenTuner.lid : (kind === 'name') ? screenTuner.name : (kind === 'avatar') ? screenTuner.avatar : null;
+  if (window.__SCREEN_TUNER_DYNAMIC && _tuner) {
+    // Recompute every time while tuning so Rotate/Flip updates immediately.
+    delete mesh.userData[cacheKey];
+  }
+
   if (!mesh.userData[cacheKey]) {
     // 1) UV bounds normalization: map the *front glass* UV region -> [0..1]
 // (the mesh can include frame/sides/backfaces; using global UV bounds crops the UI)
@@ -1852,8 +1869,13 @@ const dv = (maxV - minV) || 1;
       orient = rotAround(-Math.PI / 2);
     }
 
-    // Optional user-controlled UV flips (debug tuner)
+    // Optional user-controlled rotate/flip (debug tuner)
     const t = (kind === 'lid') ? screenTuner.lid : (kind === 'name') ? screenTuner.name : (kind === 'avatar') ? screenTuner.avatar : null;
+
+    if (t && Number.isFinite(t.rotate) && t.rotate !== 0) {
+      orient = rotAround((t.rotate * Math.PI) / 180).multiply(orient);
+    }
+
     if (t?.flipX) {
       const fx = new THREE.Matrix3();
       fx.set(-1, 0, 1,  0, 1, 0,  0, 0, 1);
