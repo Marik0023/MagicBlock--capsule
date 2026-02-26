@@ -2090,17 +2090,17 @@ function prepareAvatarImageForScreens() {
     state.avatarImgLoaded = false;
   };
   img.src = state.avatarDataUrl;
-
+}
 
 function prepareLogoImageForScreens() {
   // Loads assets/MagicBlock-Logomark-White.png once and caches it for the screen_logo canvas.
-  if (state.logoImgLoaded) return;
+  if (state.logoImgLoaded && state.logoImgEl) return;
 
   const img = new Image();
   img.onload = () => {
     // Trim transparent padding so the logo looks centered and "tight" inside the tablet.
-    const trimmed = trimTransparentImageToCanvas(img, 10);
-    state.logoImgEl = trimmed;
+    const trimmedCanvas = trimTransparentImageToCanvas(img, 10);
+    state.logoImgEl = trimmedCanvas;
     state.logoImgLoaded = true;
     renderDynamicScreens(true);
   };
@@ -2109,7 +2109,6 @@ function prepareLogoImageForScreens() {
     state.logoImgLoaded = false;
   };
   img.src = 'assets/MagicBlock-Logomark-White.png';
-}
 }
 
 function makeEdgeGlowForMesh(mesh) {
