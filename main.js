@@ -31,19 +31,6 @@ const ui = {
 };
 
 
-// === SCREEN TUNER (debug controls for aligning on-model screens) ===
-// Values are normalized: x/y are in screen widths/heights (-0.40..0.40).
-const screenTuner = {
-  // x/y are in screen fraction (-1..1), scale/stretch are multipliers, rotate is in degrees
-  name:   { x: 0.00, y: 0.250, scale: 0.56, stretchX: 2.30, stretchY: 1.00, rotate: -90, flipX: true, flipY: false },
-  avatar: { x: 0.00, y: -0.255, scale: 1.31, stretchX: 0.78, stretchY: 0.63, rotate: 0, flipX: true, flipY: true },
-  lid:    { x: 0.275, y: 0.160, scale: 0.60, stretchX: 1.00, stretchY: 1.00, rotate: 0, flipX: false, flipY: true, swapUV: true },
-};
-
-// === SCREEN TUNER UI (temporary; used to pick perfect values, then removed) ===
-window.__SCREEN_TUNER_DYNAMIC = false;
-
-
 const SUPABASE_URL = 'https://dzamfjphmomvkepirxoh.supabase.co';
 const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_S05m0mHe9SnvWeoU9MZmVA_qZl-K6Q8';
 const CAPSULE_BUCKET = 'capsule-public';
@@ -115,6 +102,25 @@ const state = {
 
 const MIN_MESSAGE_CHARS = 10;
 const CAPSULE_STORAGE_KEY = 'magicblock_time_capsule_state_v1';
+
+// === Screen UV Tuning (hardcoded) ===
+// These values map each canvas texture onto the corresponding GLB screen mesh via `texture.matrix`.
+// Units:
+//  - x,y: normalized UV translation after bounds-normalization (roughly [-0.5..0.5])
+//  - scale: uniform scale
+//  - sx,sy: non-uniform stretch multipliers
+//  - rotDeg: rotation in degrees (about UV center)
+//  - flipX/flipY: mirror in UV space (about UV center)
+//  - swapUV: swaps U and V axes (for lid UV layouts exported sideways)
+const SCREEN_UV_TUNING = {
+  name:   { x: 0.000, y: 0.250, scale: 0.56, sx: 2.30, sy: 1.00, rotDeg: -90, flipX: true,  flipY: false, swapUV: false },
+  avatar: { x: 0.000, y: -0.255, scale: 1.31, sx: 0.78, sy: 0.63, rotDeg: 0,   flipX: true,  flipY: true,  swapUV: false },
+
+  // Lid: start from the last "good" position you tuned earlier, but add swapUV support
+  // (Some exports have U/V swapped on the lid display.)
+  // If the lid still looks rotated, change rotDeg to -90 or +90.
+  lid:    { x: 0.275, y: 0.160, scale: 0.60, sx: 1.00, sy: 1.00, rotDeg: 0,   flipX: false, flipY: true,  swapUV: true },
+};
 
 function getTrimmedMessageLength(value = state.message) {
   return Array.from(String(value || '').trim()).length;
@@ -1637,21 +1643,33 @@ function computeFrontGlassUvBounds(mesh) {
 
   const result = { minU, maxU, minV, maxV };
   mesh.userData[cacheKey] = result;
-  returnfunction calibrateScreenTextureForMesh(mesh, tex, kind = 'side') {
+  return result;
+}
+
+
+function calibrateScreenTextureForMesh(mesh, tex, kind = 'side') {
   if (!mesh?.isMesh || !tex) return;
+
   const geo = mesh.geometry;
   const uva = geo?.attributes?.uv?.array;
   const uvCount = geo?.attributes?.uv?.count || 0;
   if (!uva || uvCount < 3) return;
 
-  const cacheKey = `__screenTexMatrix_${kind}`;
+  // Resolve tuning per-screen.
+  const tuning =
+    kind === 'name' ? SCREEN_UV_TUNING.name :
+    kind === 'avatar' ? SCREEN_UV_TUNING.avatar :
+    kind === 'lid' ? SCREEN_UV_TUNING.lid :
+    null;
 
-  // We hardcode screenTuner (no UI). If you ever re-enable tuning, set window.__SCREEN_TUNER_DYNAMIC=true.
-  const t = (kind === 'lid') ? screenTuner.lid : (kind === 'name') ? screenTuner.name : (kind === 'avatar') ? screenTuner.avatar : null;
-  if (window.__SCREEN_TUNER_DYNAMIC) delete mesh.userData[cacheKey];
+  // Cache matrix per (kind) + tuning signature, so it updates if you edit constants.
+  const sig = tuning
+    ? `${tuning.x},${tuning.y},${tuning.scale},${tuning.sx},${tuning.sy},${tuning.rotDeg},${tuning.flipX?'1':'0'},${tuning.flipY?'1':'0'},${tuning.swapUV?'1':'0'}`
+    : 'none';
+  const cacheKey = `__screenTexMatrix_${kind}_${sig}`;
 
   if (!mesh.userData[cacheKey]) {
-    // 1) UV bounds normalization: map the *front glass* UV region -> [0..1]
+    // 1) Bounds normalization: map the *front glass* UV region -> [0..1]
     const fb = computeFrontGlassUvBounds(mesh);
     let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
 
@@ -1678,7 +1696,91 @@ function computeFrontGlassUvBounds(mesh) {
       0, 0, 1
     );
 
-    // 2) Base orientation (export-specific): avatar is rotated -90° in this GLB; name and lid are not.
+    // Helpers
+    const T = (tx, ty) => {
+      const m = new THREE.Matrix3();
+      m.set(1, 0, tx, 0, 1, ty, 0, 0, 1);
+      return m;
+    };
+    const S = (sx, sy) => {
+      const m = new THREE.Matrix3();
+      m.set(sx, 0, 0, 0, sy, 0, 0, 0, 1);
+      return m;
+    };
+    const R = (rad) => {
+      const c = Math.cos(rad);
+      const s = Math.sin(rad);
+      const m = new THREE.Matrix3();
+      m.set(c, -s, 0, s, c, 0, 0, 0, 1);
+      return m;
+    };
+    const flipMX = () => {
+      const m = new THREE.Matrix3();
+      // u -> 1-u
+      m.set(-1, 0, 1, 0, 1, 0, 0, 0, 1);
+      return m;
+    };
+    const flipMY = () => {
+      const m = new THREE.Matrix3();
+      // v -> 1-v
+      m.set(1, 0, 0, 0, -1, 1, 0, 0, 1);
+      return m;
+    };
+    const swapUV = () => {
+      const m = new THREE.Matrix3();
+      // (u,v) -> (v,u)
+      m.set(0, 1, 0, 1, 0, 0, 0, 0, 1);
+      return m;
+    };
+
+    const aroundCenter = (m) => T(0.5, 0.5).multiply(m).multiply(T(-0.5, -0.5));
+
+    let M = bounds;
+
+    if (tuning) {
+      // Optional U/V swap (some lid exports)
+      if (tuning.swapUV) M = aroundCenter(swapUV()).multiply(M);
+
+      // Translation (after normalization)
+      if (tuning.x || tuning.y) M = T(tuning.x, tuning.y).multiply(M);
+
+      // Scale / stretch / rotate / flips around UV center
+      const uni = tuning.scale ?? 1;
+      const sx = (tuning.sx ?? 1) * uni;
+      const sy = (tuning.sy ?? 1) * uni;
+
+      if (sx !== 1 || sy !== 1) M = aroundCenter(S(sx, sy)).multiply(M);
+
+      const rotRad = ((tuning.rotDeg || 0) * Math.PI) / 180;
+      if (rotRad) M = aroundCenter(R(rotRad)).multiply(M);
+
+      if (tuning.flipX) M = aroundCenter(flipMX()).multiply(M);
+      if (tuning.flipY) M = aroundCenter(flipMY()).multiply(M);
+    }
+
+    mesh.userData[cacheKey] = M;
+  }
+
+  tex.flipY = false;
+  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.matrixAutoUpdate = false;
+  tex.matrix.copy(mesh.userData[cacheKey]);
+  tex.needsUpdate = true;
+}
+
+
+const du = (maxU - minU) || 1;
+const dv = (maxV - minV) || 1;
+
+    const bounds = new THREE.Matrix3();
+    bounds.set(
+      1 / du, 0, -minU / du,
+      0, 1 / dv, -minV / dv,
+      0, 0, 1
+    );
+
+    // 2) Orientation fix (this GLB has rotated screens; lid also mirrored).
     const T = (tx, ty) => {
       const m = new THREE.Matrix3();
       m.set(1, 0, tx, 0, 1, ty, 0, 0, 1);
@@ -1691,64 +1793,20 @@ function computeFrontGlassUvBounds(mesh) {
       m.set(c, -s, 0, s, c, 0, 0, 0, 1);
       return m;
     };
-    const S = (sx, sy) => {
-      const m = new THREE.Matrix3();
-      m.set(sx, 0, 0, 0, sy, 0, 0, 0, 1);
-      return m;
-    };
     const rotAround = (rad, cx = 0.5, cy = 0.5) => T(cx, cy).multiply(R(rad)).multiply(T(-cx, -cy));
-    const scaleAround = (sx, sy, cx = 0.5, cy = 0.5) => T(cx, cy).multiply(S(sx, sy)).multiply(T(-cx, -cy));
 
-    let orient = new THREE.Matrix3();
-    orient.identity();
-
-    if (kind === 'avatar') {
-      orient = rotAround(-Math.PI / 2).multiply(orient);
-    } else {
-      // name + lid: keep base orientation
-      orient = rotAround(0).multiply(orient);
-    }
-
-    // 3) Per-screen transform (rotate/flip/swapUV) applied in UV space
-    if (t?.swapUV) {
-      // swap U and V (transpose) – required for lid UV layout in this model
-      const suv = new THREE.Matrix3();
-      suv.set(
-        0, 1, 0,
-        1, 0, 0,
-        0, 0, 1
-      );
-      orient = suv.multiply(orient);
-    }
-
-    if (t && Number.isFinite(t.rotate) && t.rotate !== 0) {
-      orient = rotAround((t.rotate * Math.PI) / 180).multiply(orient);
-    }
-
-    if (t?.flipX) {
-      const fx = new THREE.Matrix3();
-      fx.set(-1, 0, 1,  0, 1, 0,  0, 0, 1);
-      orient = fx.multiply(orient);
-    }
-    if (t?.flipY) {
-      const fy = new THREE.Matrix3();
-      fy.set(1, 0, 0,  0, -1, 1,  0, 0, 1);
-      orient = fy.multiply(orient);
-    }
-
-    // 4) Keep aspect stable: apply scale/stretch as UV repeat (around center) so UI doesn't "squish"
-    // (x/y/scale/stretch are already used in canvas painter; for lid we moved them out of painter,
-    // so we apply them here in UV space ONLY for lid.)
+    let orient;
     if (kind === 'lid') {
-      const sx = (t?.scale ?? 1) * (t?.stretchX ?? 1);
-      const sy = (t?.scale ?? 1) * (t?.stretchY ?? 1);
-      orient = scaleAround(sx, sy).multiply(orient);
-
-      const ox = (t?.x ?? 0);
-      const oy = (t?.y ?? 0);
-      orient = T(ox, oy).multiply(orient);
+      // Lid: +90° and flip Y to keep text upright on this export
+      const flipY = new THREE.Matrix3();
+      flipY.set(1, 0, 0, 0, -1, 1, 0, 0, 1);
+      orient = flipY.multiply(rotAround(Math.PI / 2));
+    } else {
+      // Side screens: -90° (standard for this export)
+      orient = rotAround(-Math.PI / 2);
     }
 
+    // Final: orient * bounds
     mesh.userData[cacheKey] = orient.multiply(bounds);
   }
 
@@ -1758,7 +1816,6 @@ function computeFrontGlassUvBounds(mesh) {
   tex.matrixAutoUpdate = false;
   tex.matrix.copy(mesh.userData[cacheKey]);
   tex.needsUpdate = true;
-}te = true;
 }
 
 
@@ -2125,166 +2182,76 @@ function drawLockGlyph(ctx, x, y, size, progressClosed) {
 }
 
 function drawLidScreenCanvas(ctx, w, h, time) {
-  // No extra bezel/borders/buttons (hardware frame is already in the 3D model)
-  const innerX = 0, innerY = 0, innerW = w, innerH = h;
+  // Clean screen: no extra bezel/borders/buttons (hardware frame is already in the 3D model)
+  drawScreenGlassBg(ctx, w, h, {
+    radius: 0,
+    border: 0,
+    glow: 0.16,
+    inset: 0,
+    accentA: 'rgba(111,228,255,0.40)',
+    accentB: 'rgba(123,134,255,0.22)',
+    inner: 'rgba(7,11,17,0.96)',
+  });
 
-  // Base (opaque)
-  ctx.save();
-  ctx.fillStyle = '#060a12';
-  ctx.fillRect(0, 0, w, h);
-  ctx.restore();
-
-  // Soft futuristic gradient
-  const g = ctx.createLinearGradient(0, 0, w, h);
-  g.addColorStop(0, 'rgba(12,22,38,0.96)');
-  g.addColorStop(0.55, 'rgba(7,12,22,0.96)');
-  g.addColorStop(1, 'rgba(4,6,12,0.98)');
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, w, h);
-
-  // Subtle scanline
-  const scanY = ((time * 80) % (h + 120)) - 120;
-  const scan = ctx.createLinearGradient(0, scanY, 0, scanY + 120);
-  scan.addColorStop(0, 'rgba(0,0,0,0)');
-  scan.addColorStop(0.45, 'rgba(140,240,255,0.06)');
-  scan.addColorStop(0.55, 'rgba(140,240,255,0.10)');
-  scan.addColorStop(1, 'rgba(0,0,0,0)');
-  ctx.fillStyle = scan;
-  ctx.fillRect(0, 0, w, h);
-
-  // Lid screen transform is applied in UV space (see calibrateScreenTextureForMesh)
-
-  // Status
-  const sealing = state.sealAnimPlaying;
-  const status = state.sealed ? 'SEALED' : (sealing ? 'LOCKING' : 'READY');
-  const subtitle = state.sealed ? 'CAPSULE VERIFIED' : 'CAPSULE SECURITY';
-  const hint = state.sealed ? 'Stored until TGE' : 'Ready to seal';
-
-  // Center panel
-  const pad = Math.floor(w * 0.12);
-  const panelX = pad;
-  const panelY = Math.floor(h * 0.18);
-  const panelW = w - pad * 2;
-  const panelH = Math.floor(h * 0.64);
-  const r = 34;
-
-  // Glow
-  ctx.save();
-  ctx.shadowColor = state.sealed ? 'rgba(120,210,255,0.28)' : 'rgba(120,255,210,0.24)';
-  ctx.shadowBlur = 28;
-  ctx.fillStyle = 'rgba(255,255,255,0.04)';
-  roundRect(ctx, panelX, panelY, panelW, panelH, r);
-  ctx.fill();
-  ctx.restore();
-
-  // Panel fill
-  const pg = ctx.createLinearGradient(panelX, panelY, panelX, panelY + panelH);
-  pg.addColorStop(0, 'rgba(10,16,26,0.88)');
-  pg.addColorStop(1, 'rgba(6,10,16,0.92)');
-  ctx.fillStyle = pg;
-  roundRect(ctx, panelX, panelY, panelW, panelH, r);
-  ctx.fill();
-
-  // Panel border
-  ctx.strokeStyle = state.sealed ? 'rgba(140,230,255,0.22)' : 'rgba(140,255,220,0.18)';
-  ctx.lineWidth = 2;
-  roundRect(ctx, panelX, panelY, panelW, panelH, r);
-  ctx.stroke();
-
-  // Ring + lock
-  const cx = w * 0.5;
-  const cy = panelY + panelH * 0.42;
-  const ringR = Math.min(panelW, panelH) * 0.18;
-
-  // Ring background
-  ctx.lineWidth = 10;
-  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
-  ctx.beginPath();
-  ctx.arc(cx, cy, ringR, 0, Math.PI * 2);
-  ctx.stroke();
-
-  // Ring progress (seal animation)
   const closeP = 1 - clamp01(state.lidAnimT);
   const sealP = state.sealAnimPlaying ? easeOutCubic(closeP) : (state.sealed ? 1 : 0);
-  ctx.strokeStyle = state.sealed ? 'rgba(120,210,255,0.85)' : 'rgba(120,255,210,0.75)';
-  ctx.shadowColor = ctx.strokeStyle;
-  ctx.shadowBlur = 16;
-  ctx.beginPath();
-  ctx.arc(cx, cy, ringR, -Math.PI * 0.5, -Math.PI * 0.5 + Math.PI * 2 * Math.max(0.02, sealP));
-  ctx.stroke();
-  ctx.shadowBlur = 0;
 
-  // Simple lock icon
-  const lockW = ringR * 0.95;
-  const lockH = ringR * 1.05;
-  ctx.save();
-  ctx.translate(cx, cy);
-  ctx.strokeStyle = 'rgba(230,248,255,0.92)';
-  ctx.lineWidth = 6;
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
+  // Main lock glyph
+  drawLockGlyph(ctx, w * 0.5, h * 0.46, h * 0.68, sealP);
 
-  // shackle
-  ctx.beginPath();
-  ctx.arc(0, -lockH * 0.18, lockW * 0.32, Math.PI * 1.05, Math.PI * 1.95);
-  ctx.stroke();
-
-  // body
-  ctx.beginPath();
-  roundRect(ctx, -lockW * 0.38, -lockH * 0.02, lockW * 0.76, lockH * 0.62, lockW * 0.14);
-  ctx.stroke();
-
-  // keyhole
-  ctx.fillStyle = 'rgba(230,248,255,0.55)';
-  ctx.beginPath();
-  ctx.arc(0, lockH * 0.22, lockW * 0.08, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-
-  // Text
+  const status = state.sealed ? 'SEALED' : (state.sealAnimPlaying ? 'LOCKING…' : 'READY');
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
-  const tg = ctx.createLinearGradient(w * 0.32, 0, w * 0.68, 0);
+  const titleGrad = ctx.createLinearGradient(w * 0.25, 0, w * 0.75, 0);
   if (state.sealed) {
-    tg.addColorStop(0, '#d7f2ff');
-    tg.addColorStop(1, '#7ecbff');
+    titleGrad.addColorStop(0, '#d7f2ff');
+    titleGrad.addColorStop(1, '#8ad5ff');
   } else {
-    tg.addColorStop(0, '#c9ffe8');
-    tg.addColorStop(1, '#7dffd0');
+    titleGrad.addColorStop(0, '#c8ffea');
+    titleGrad.addColorStop(1, '#83ffd0');
   }
 
-  ctx.fillStyle = tg;
-  ctx.font = '800 54px Inter, system-ui, sans-serif';
-  ctx.shadowColor = state.sealed ? 'rgba(120,210,255,0.25)' : 'rgba(120,255,210,0.20)';
-  ctx.shadowBlur = 18;
-  ctx.fillText(status, w / 2, panelY + panelH * 0.78);
+  ctx.shadowColor = 'rgba(118,220,255,0.30)';
+  ctx.shadowBlur = 16;
+  ctx.fillStyle = titleGrad;
+  ctx.font = '800 64px Inter, sans-serif';
+  ctx.fillText(status, w / 2, h * 0.70);
+
   ctx.shadowBlur = 0;
+  ctx.fillStyle = 'rgba(211,233,255,0.66)';
+  ctx.font = '600 22px Inter, sans-serif';
+  ctx.fillText('TGE CAPSULE SECURITY', w / 2, h * 0.82);
 
-  ctx.fillStyle = 'rgba(215,235,255,0.70)';
-  ctx.font = '650 20px Inter, system-ui, sans-serif';
-  ctx.fillText(subtitle, w / 2, panelY + panelH * 0.88);
+  // Centered progress bar
+  const barW = w * 0.56;
+  const barH = 26;
+  const barX = (w - barW) / 2;
+  const barY = h * 0.87;
 
-  ctx.fillStyle = 'rgba(200,220,255,0.55)';
-  ctx.font = '600 18px Inter, system-ui, sans-serif';
-  ctx.fillText(hint, w / 2, panelY + panelH * 0.94);
+  ctx.fillStyle = 'rgba(255,255,255,0.06)';
+  roundRect(ctx, barX, barY, barW, barH, 13);
+  ctx.fill();
 
-  ctx.restore();
+  const fillP = state.sealed ? 1 : (state.sealAnimPlaying ? easeOutCubic(closeP) : 0.22 + Math.sin(time * 2.3) * 0.04);
+  const fillGrad = ctx.createLinearGradient(barX, barY, barX + barW, barY);
+  fillGrad.addColorStop(0, state.sealed ? 'rgba(120,214,255,0.95)' : 'rgba(111,255,203,0.95)');
+  fillGrad.addColorStop(1, 'rgba(125,136,255,0.9)');
+  ctx.fillStyle = fillGrad;
+  roundRect(ctx, barX + 2, barY + 2, Math.max(10, (barW - 4) * clamp01(fillP)), barH - 4, 11);
+  ctx.fill();
 
-  // tiny corner ticks
+  // Light sweep
+  const sweepX = ((time * 220) % (barW + 160)) - 80;
   ctx.save();
-  ctx.strokeStyle = state.sealed ? 'rgba(140,230,255,0.18)' : 'rgba(140,255,220,0.14)';
-  ctx.lineWidth = 2;
-  const t = 26;
-  const ox = 22, oy = 22;
-  // TL
-  ctx.beginPath(); ctx.moveTo(ox, oy + t); ctx.lineTo(ox, oy); ctx.lineTo(ox + t, oy); ctx.stroke();
-  // TR
-  ctx.beginPath(); ctx.moveTo(w - ox - t, oy); ctx.lineTo(w - ox, oy); ctx.lineTo(w - ox, oy + t); ctx.stroke();
-  // BL
-  ctx.beginPath(); ctx.moveTo(ox, h - oy - t); ctx.lineTo(ox, h - oy); ctx.lineTo(ox + t, h - oy); ctx.stroke();
-  // BR
-  ctx.beginPath(); ctx.moveTo(w - ox - t, h - oy); ctx.lineTo(w - ox, h - oy); ctx.lineTo(w - ox, h - oy - t); ctx.stroke();
+  roundRect(ctx, barX + 2, barY + 2, barW - 4, barH - 4, 11);
+  ctx.clip();
+  const sweep = ctx.createLinearGradient(barX + sweepX - 50, barY, barX + sweepX + 50, barY);
+  sweep.addColorStop(0, 'rgba(255,255,255,0)');
+  sweep.addColorStop(0.5, 'rgba(255,255,255,0.32)');
+  sweep.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = sweep;
+  ctx.fillRect(barX, barY, barW, barH);
   ctx.restore();
 }
 
@@ -2333,48 +2300,29 @@ function drawNameScreenCanvas(ctx, w, h, time) {
   ctx.shadowColor = 'rgba(118,220,255,0.28)';
   ctx.shadowBlur = 16;
   ctx.fillStyle = nameGrad;
-  ctx.font = `800 ${Math.round(size * pulse * (screenTuner.name.scale || 1))}px Inter, sans-serif`;
-  const nx = w * 0.5 + (screenTuner.name.x || 0) * w;
-  const ny = h * 0.5 + (screenTuner.name.y || 0) * h;
-  // subtle outline to keep text readable
-  const nsx = (screenTuner.name.stretchX || 1);
-  const nsy = (screenTuner.name.stretchY || 1);
-  ctx.save();
-  ctx.translate(nx, ny);
-  ctx.scale(nsx, nsy);
-  ctx.translate(-nx, -ny);
-  ctx.lineWidth = Math.max(4, Math.round((Math.round(size * pulse) / 20)));
-  ctx.strokeStyle = 'rgba(0,0,0,0.55)';
-  ctx.strokeText(nick, nx, ny);
-  ctx.fillText(nick, nx, ny);
-  ctx.restore();
+  ctx.font = `800 ${Math.round(size * pulse)}px Inter, sans-serif`;
+  ctx.fillText(nick, w / 2, h / 2);
 
   ctx.shadowBlur = 0;
 }
 
 
 function drawAvatarScreenCanvas(ctx, w, h, time) {
-  // Clean screen: hardware frame is in the 3D model. We paint the whole canvas fully opaque
-  // so no "side bars" from the underlying glass can bleed through.
-  const innerX = 0, innerY = 0, innerW = w, innerH = h;
-
-  // Always start with an opaque base
-  ctx.save();
-  ctx.globalCompositeOperation = 'source-over';
-  ctx.fillStyle = '#0b1020';
-  ctx.fillRect(0, 0, w, h);
-  ctx.restore();
-
-  // Subtle glass glow (no borders/buttons)
+  // Clean screen: no extra bezel/borders/buttons
   drawScreenGlassBg(ctx, w, h, {
     radius: 0,
     border: 0,
-    glow: 0.10,
+    glow: 0.12,
     inset: 0,
-    accentA: 'rgba(111,228,255,0.12)',
-    accentB: 'rgba(123,134,255,0.08)',
-    inner: 'rgba(0,0,0,0)', // keep transparent; base fill already set
+    accentA: 'rgba(111,228,255,0.18)',
+    accentB: 'rgba(123,134,255,0.12)',
+    inner: 'rgba(10,14,22,0.96)',
   });
+
+  const innerX = 0;
+  const innerY = 0;
+  const innerW = w;
+  const innerH = h;
 
   ctx.save();
   ctx.beginPath();
@@ -2383,35 +2331,36 @@ function drawAvatarScreenCanvas(ctx, w, h, time) {
 
   const img = state.avatarImgEl;
   if (img && state.avatarImgLoaded) {
-    // Cover fill (no empty bars) + user offsets/scale/stretch
-    const baseCover = Math.max(innerW / img.width, innerH / img.height);
-    const userScale = (screenTuner.avatar.scale || 1);
-    const asx = (screenTuner.avatar.stretchX || 1);
-    const asy = (screenTuner.avatar.stretchY || 1);
+    const floatX = Math.sin(time * 1.6) * 6;
+    const floatY = Math.cos(time * 1.9) * 5;
 
-    // Ensure we NEVER go below baseCover, otherwise bars appear
-    const coverScale = Math.max(baseCover, baseCover * userScale);
+    // 1) Fill background with a blurred "cover" (no empty bars)
+    ctx.save();
+    ctx.globalAlpha = 0.92;
+    ctx.filter = 'blur(18px)';
+    const coverScale = Math.max(innerW / img.width, innerH / img.height);
+    const cW = img.width * coverScale;
+    const cH = img.height * coverScale;
+    const cX = innerX + (innerW - cW) / 2;
+    const cY = innerY + (innerH - cH) / 2;
+    ctx.drawImage(img, cX, cY, cW, cH);
+    ctx.restore();
 
-    let dW = img.width * coverScale * asx;
-    let dH = img.height * coverScale * asy;
-
-    // Center + manual offsets
-    const dX = innerX + (innerW - dW) / 2 + (screenTuner.avatar.x || 0) * innerW;
-    const dY = innerY + (innerH - dH) / 2 + (screenTuner.avatar.y || 0) * innerH;
-
-    // Draw once, crisp
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(img, dX, dY, dW, dH);
-
-    // Tiny contrast lift so it pops
-    const v = ctx.createLinearGradient(innerX, innerY, innerX, innerY + innerH);
-    v.addColorStop(0, 'rgba(255,255,255,0.03)');
-    v.addColorStop(1, 'rgba(0,0,0,0.06)');
-    ctx.fillStyle = v;
+    // 2) Darken a bit for readability
+    const bg = ctx.createLinearGradient(innerX, innerY, innerX + innerW, innerY + innerH);
+    bg.addColorStop(0, 'rgba(0,0,0,0.20)');
+    bg.addColorStop(1, 'rgba(0,0,0,0.34)');
+    ctx.fillStyle = bg;
     ctx.fillRect(innerX, innerY, innerW, innerH);
+
+    // 3) Foreground avatar "contain" (NO cropping) — always centered
+    const containScale = Math.min(innerW / img.width, innerH / img.height) * (1.0 + Math.sin(time * 1.4) * 0.006);
+    const dW = img.width * containScale;
+    const dH = img.height * containScale;
+    const dX = innerX + (innerW - dW) / 2 + floatX;
+    const dY = innerY + (innerH - dH) / 2 + floatY;
+    ctx.drawImage(img, dX, dY, dW, dH);
   } else {
-    // Placeholder
     const ph = ctx.createLinearGradient(innerX, innerY, innerX + innerW, innerY + innerH);
     ph.addColorStop(0, 'rgba(28,38,56,0.95)');
     ph.addColorStop(1, 'rgba(14,20,30,0.95)');
@@ -2420,10 +2369,19 @@ function drawAvatarScreenCanvas(ctx, w, h, time) {
 
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = 'rgba(210,230,255,0.75)';
-    ctx.font = '700 34px Inter, system-ui, sans-serif';
-    ctx.fillText('AVATAR', innerX + innerW / 2, innerY + innerH / 2);
+    ctx.font = '700 30px Inter, sans-serif';
+    ctx.fillStyle = 'rgba(200,220,255,0.7)';
+    ctx.fillText('AVATAR', w / 2, h / 2);
   }
+
+  // Sweep line (subtle)
+  const sweepY = ((time * 180) % (innerH + 160)) - 80;
+  const sg = ctx.createLinearGradient(0, innerY + sweepY - 40, 0, innerY + sweepY + 40);
+  sg.addColorStop(0, 'rgba(255,255,255,0)');
+  sg.addColorStop(0.5, 'rgba(170,232,255,0.12)');
+  sg.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = sg;
+  ctx.fillRect(innerX, innerY, innerW, innerH);
 
   ctx.restore();
 }
