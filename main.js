@@ -1511,24 +1511,70 @@ function computeScreenUvCalibration(mesh) {
   return mat;
 }
 
-function calibrateScreenTextureForMesh(mesh, tex) {
+function calibrateScreenTextureForMesh(mesh, tex, kind = 'side') {
   if (!mesh?.isMesh || !tex) return;
+  const geo = mesh.geometry;
+  const uva = geo?.attributes?.uv?.array;
+  const uvCount = geo?.attributes?.uv?.count || 0;
+  if (!uva || uvCount < 3) return;
 
-  // Make sure matrixWorld is up to date before analyzing UV orientation.
-  mesh.updateWorldMatrix(true, false);
+  const cacheKey = `__screenTexMatrix_${kind}`;
+  if (!mesh.userData[cacheKey]) {
+    // 1) UV bounds normalization: map [min..max] -> [0..1]
+    let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
+    for (let i = 0; i < uvCount; i++) {
+      const u = uva[i * 2];
+      const v = uva[i * 2 + 1];
+      if (u < minU) minU = u;
+      if (u > maxU) maxU = u;
+      if (v < minV) minV = v;
+      if (v > maxV) maxV = v;
+    }
+    const du = (maxU - minU) || 1;
+    const dv = (maxV - minV) || 1;
 
-  if (!mesh.userData.__screenUvMatrix) {
-    const mat = computeScreenUvCalibration(mesh);
-    mesh.userData.__screenUvMatrix = mat || new THREE.Matrix3().identity();
+    const bounds = new THREE.Matrix3();
+    bounds.set(
+      1 / du, 0, -minU / du,
+      0, 1 / dv, -minV / dv,
+      0, 0, 1
+    );
+
+    // 2) Orientation fix (this GLB has rotated screens; lid also mirrored).
+    const T = (tx, ty) => {
+      const m = new THREE.Matrix3();
+      m.set(1, 0, tx, 0, 1, ty, 0, 0, 1);
+      return m;
+    };
+    const R = (rad) => {
+      const c = Math.cos(rad);
+      const s = Math.sin(rad);
+      const m = new THREE.Matrix3();
+      m.set(c, -s, 0, s, c, 0, 0, 0, 1);
+      return m;
+    };
+    const rotAround = (rad, cx = 0.5, cy = 0.5) => T(cx, cy).multiply(R(rad)).multiply(T(-cx, -cy));
+
+    let orient;
+    if (kind === 'lid') {
+      // Lid: +90° and flip Y to keep text upright on this export
+      const flipY = new THREE.Matrix3();
+      flipY.set(1, 0, 0, 0, -1, 1, 0, 0, 1);
+      orient = flipY.multiply(rotAround(Math.PI / 2));
+    } else {
+      // Side screens: -90° (standard for this export)
+      orient = rotAround(-Math.PI / 2);
+    }
+
+    // Final: orient * bounds
+    mesh.userData[cacheKey] = orient.multiply(bounds);
   }
 
   tex.flipY = false;
   tex.wrapS = THREE.ClampToEdgeWrapping;
   tex.wrapT = THREE.ClampToEdgeWrapping;
-
   tex.matrixAutoUpdate = false;
-  tex.matrix.copy(mesh.userData.__screenUvMatrix);
-
+  tex.matrix.copy(mesh.userData[cacheKey]);
   tex.needsUpdate = true;
 }
 
@@ -2175,7 +2221,7 @@ function renderDynamicScreens(force = false) {
     if (!(lidMat && (lidMat.emissiveMap === pack.tex || lidMat.map === pack.tex))) {
       state.screens.lid.material = createScreenMaterial(pack.tex, 0xffffff, 1.15);
     }
-    calibrateScreenTextureForMesh(state.screens.lid, pack.tex);
+    calibrateScreenTextureForMesh(state.screens.lid, pack.tex, 'lid');
     state.screens.lid.material.emissiveIntensity = state.sealed ? 1.25 : 1.05;
   }
 
@@ -2187,7 +2233,7 @@ function renderDynamicScreens(force = false) {
     if (!(nameMat && (nameMat.emissiveMap === pack.tex || nameMat.map === pack.tex))) {
       state.screens.name.material = createScreenMaterial(pack.tex, 0xffffff, 1.0);
     }
-    calibrateScreenTextureForMesh(state.screens.name, pack.tex);
+    calibrateScreenTextureForMesh(state.screens.name, pack.tex, 'side');
     state.screens.name.material.emissiveIntensity = 1.0 + Math.sin(now * 3.7) * 0.08;
   }
 
@@ -2199,7 +2245,7 @@ function renderDynamicScreens(force = false) {
     if (!(avMat && (avMat.emissiveMap === pack.tex || avMat.map === pack.tex))) {
       state.screens.avatar.material = createScreenMaterial(pack.tex, 0xffffff, 0.95);
     }
-    calibrateScreenTextureForMesh(state.screens.avatar, pack.tex);
+    calibrateScreenTextureForMesh(state.screens.avatar, pack.tex, 'side');
     state.screens.avatar.material.emissiveIntensity = 0.95 + Math.sin(now * 3.1 + 0.8) * 0.06;
   }
 }
@@ -2375,15 +2421,15 @@ function placeholderMaterial(label) {
 function setupScreenPlaceholders() {
   if (state.screens.lid?.isMesh) {
     state.screens.lid.material = placeholderMaterial('LOCK');
-    if (state.screens.lid.material?.map) calibrateScreenTextureForMesh(state.screens.lid, state.screens.lid.material.map);
+    if (state.screens.lid.material?.map) calibrateScreenTextureForMesh(state.screens.lid, state.screens.lid.material.map, 'lid');
   }
   if (state.screens.name?.isMesh) {
     state.screens.name.material = placeholderMaterial('NAME');
-    if (state.screens.name.material?.map) calibrateScreenTextureForMesh(state.screens.name, state.screens.name.material.map);
+    if (state.screens.name.material?.map) calibrateScreenTextureForMesh(state.screens.name, state.screens.name.material.map, 'side');
   }
   if (state.screens.avatar?.isMesh) {
     state.screens.avatar.material = placeholderMaterial('AVATAR');
-    if (state.screens.avatar.material?.map) calibrateScreenTextureForMesh(state.screens.avatar, state.screens.avatar.material.map);
+    if (state.screens.avatar.material?.map) calibrateScreenTextureForMesh(state.screens.avatar, state.screens.avatar.material.map, 'side');
   }
 }
 
