@@ -2195,13 +2195,19 @@ function drawNameScreenCanvas(ctx, w, h, time) {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.shadowColor = 'rgba(118,220,255,0.28)';
-  ctx.shadowBlur = 16;
+  ctx.shadowBlur = 22;
   ctx.fillStyle = nameGrad;
   ctx.font = `800 ${Math.round(size * pulse)}px Inter, sans-serif`;
-  const nameY = h * 0.62;
+  const nameY = h * 0.50;
   ctx.save();
   ctx.translate(w / 2, nameY);
-  ctx.scale(1.12, 1.0); // slight horizontal stretch
+  ctx.scale(1.06, 1.0); // slight horizontal stretch
+  // Add a subtle dark stroke so the nickname is always readable
+  ctx.lineJoin = 'round';
+  ctx.miterLimit = 2;
+  ctx.lineWidth = Math.max(6, Math.round(size * 0.14));
+  ctx.strokeStyle = 'rgba(6,8,12,0.72)';
+  ctx.strokeText(nick, 0, 0);
   ctx.fillText(nick, 0, 0);
   ctx.restore();
 
@@ -2233,8 +2239,8 @@ function drawAvatarScreenCanvas(ctx, w, h, time) {
 
   const img = state.avatarImgEl;
   if (img && state.avatarImgLoaded) {
-    const floatX = Math.sin(time * 1.6) * 6;
-    const floatY = Math.cos(time * 1.9) * 5;
+    const floatX = Math.sin(time * 1.6) * 2;
+    const floatY = Math.cos(time * 1.9) * 2;
 
     // 1) Fill background with a blurred "cover" (no empty bars)
     ctx.save();
@@ -2256,11 +2262,11 @@ function drawAvatarScreenCanvas(ctx, w, h, time) {
     ctx.fillRect(innerX, innerY, innerW, innerH);
 
     // 3) Foreground avatar "contain" (NO cropping) — always centered
-    const containScale = Math.min(innerW / img.width, innerH / img.height) * 0.90 * (1.0 + Math.sin(time * 1.4) * 0.006); // slightly smaller
+    const containScale = Math.min(innerW / img.width, innerH / img.height) * 0.78 * (1.0 + Math.sin(time * 1.4) * 0.004); // slightly smaller
     const dW = img.width * containScale;
     const dH = img.height * containScale;
     const dX = innerX + (innerW - dW) / 2 + floatX;
-    const dY = innerY + (innerH - dH) / 2 + floatY - innerH * 0.06; // lift a bit
+    const dY = innerY + (innerH - dH) / 2 + floatY - innerH * 0.20; // lift more so the head sits centered
     ctx.drawImage(img, dX, dY, dW, dH);
   } else {
     const ph = ctx.createLinearGradient(innerX, innerY, innerX + innerW, innerY + innerH);
