@@ -1511,6 +1511,122 @@ function computeScreenUvCalibration(mesh) {
   return mat;
 }
 
+
+function computeFrontGlassUvBounds(mesh) {
+  // Many GLB exports merge the screen glass, frame and side walls into one mesh.
+  // If we normalize by the *global* UV bounds, the actual front glass gets only a sub-rectangle of the canvas (cropped UI).
+  // Here we detect the dominant front-facing plane by face normals and compute UV bounds only for that plane.
+  const geo = mesh?.geometry;
+  const posAttr = geo?.attributes?.position;
+  const uvAttr = geo?.attributes?.uv;
+  if (!geo || !posAttr || !uvAttr) return null;
+
+  const pos = posAttr.array;
+  const uv = uvAttr.array;
+  const idx = geo.index ? geo.index.array : null;
+  const triCount = idx ? Math.floor(idx.length / 3) : Math.floor(posAttr.count / 3);
+  if (triCount < 1) return null;
+
+  // Cache per-geometry to avoid repeated work
+  const cacheKey = '__frontGlassUvBounds';
+  if (mesh.userData?.[cacheKey]) return mesh.userData[cacheKey];
+
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
+  const n = new THREE.Vector3();
+  const seed = new THREE.Vector3(0, 0, 1);
+
+  let bestArea2 = -1;
+
+  const getVid = (t, k) => idx ? idx[t * 3 + k] : (t * 3 + k);
+
+  // Pass 1: pick a seed normal from the largest-area triangle
+  for (let t = 0; t < triCount; t++) {
+    const ia = getVid(t, 0), ib = getVid(t, 1), ic = getVid(t, 2);
+    a.set(pos[ia * 3], pos[ia * 3 + 1], pos[ia * 3 + 2]);
+    b.set(pos[ib * 3], pos[ib * 3 + 1], pos[ib * 3 + 2]);
+    c.set(pos[ic * 3], pos[ic * 3 + 1], pos[ic * 3 + 2]);
+
+    n.copy(b).sub(a).cross(c.clone().sub(a));
+    const area2 = n.length(); // proportional to area (2x)
+    if (area2 > bestArea2 && area2 > 1e-12) {
+      bestArea2 = area2;
+      seed.copy(n).normalize();
+    }
+  }
+
+  if (bestArea2 < 1e-12) return null;
+
+  // Pass 2: compute dominant plane normal (area-weighted, hemisphere-aligned)
+  const avg = new THREE.Vector3(0, 0, 0);
+  for (let t = 0; t < triCount; t++) {
+    const ia = getVid(t, 0), ib = getVid(t, 1), ic = getVid(t, 2);
+    a.set(pos[ia * 3], pos[ia * 3 + 1], pos[ia * 3 + 2]);
+    b.set(pos[ib * 3], pos[ib * 3 + 1], pos[ib * 3 + 2]);
+    c.set(pos[ic * 3], pos[ic * 3 + 1], pos[ic * 3 + 2]);
+
+    n.copy(b).sub(a).cross(c.clone().sub(a));
+    const area2 = n.length();
+    if (area2 < 1e-12) continue;
+
+    n.normalize();
+    if (n.dot(seed) < 0) n.multiplyScalar(-1);
+    avg.addScaledVector(n, area2);
+  }
+
+  if (avg.lengthSq() < 1e-12) return null;
+  avg.normalize();
+
+  const cos15 = Math.cos(THREE.MathUtils.degToRad(15));
+  const cos25 = Math.cos(THREE.MathUtils.degToRad(25));
+
+  let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
+  let selected = 0;
+
+  const accumulate = (t, cosThresh) => {
+    const ia = getVid(t, 0), ib = getVid(t, 1), ic = getVid(t, 2);
+    a.set(pos[ia * 3], pos[ia * 3 + 1], pos[ia * 3 + 2]);
+    b.set(pos[ib * 3], pos[ib * 3 + 1], pos[ib * 3 + 2]);
+    c.set(pos[ic * 3], pos[ic * 3 + 1], pos[ic * 3 + 2]);
+
+    n.copy(b).sub(a).cross(c.clone().sub(a));
+    const area2 = n.length();
+    if (area2 < 1e-12) return false;
+
+    n.normalize();
+    if (n.dot(seed) < 0) n.multiplyScalar(-1);
+    const cos = n.dot(avg);
+    if (cos < cosThresh) return false;
+
+    // include UVs for this face
+    const vids = [ia, ib, ic];
+    for (let j = 0; j < 3; j++) {
+      const vId = vids[j];
+      const u = uv[vId * 2];
+      const v = uv[vId * 2 + 1];
+      if (u < minU) minU = u;
+      if (u > maxU) maxU = u;
+      if (v < minV) minV = v;
+      if (v > maxV) maxV = v;
+    }
+    selected++;
+    return true;
+  };
+
+  // Try with 15°, fallback to 25° if too few faces selected.
+  for (let t = 0; t < triCount; t++) accumulate(t, cos15);
+  if (selected < Math.max(6, triCount * 0.05)) {
+    minU = Infinity; maxU = -Infinity; minV = Infinity; maxV = -Infinity;
+    selected = 0;
+    for (let t = 0; t < triCount; t++) accumulate(t, cos25);
+  }
+
+  if (!isFinite(minU) || !isFinite(minV) || (maxU - minU) < 1e-8 || (maxV - minV) < 1e-8) return null;
+
+  const result = { minU, maxU, minV, maxV };
+  mesh.userData[cacheKey] = result;
+  return result;
+}
+
 function calibrateScreenTextureForMesh(mesh, tex, kind = 'side') {
   if (!mesh?.isMesh || !tex) return;
   const geo = mesh.geometry;
@@ -1520,18 +1636,26 @@ function calibrateScreenTextureForMesh(mesh, tex, kind = 'side') {
 
   const cacheKey = `__screenTexMatrix_${kind}`;
   if (!mesh.userData[cacheKey]) {
-    // 1) UV bounds normalization: map [min..max] -> [0..1]
-    let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
-    for (let i = 0; i < uvCount; i++) {
-      const u = uva[i * 2];
-      const v = uva[i * 2 + 1];
-      if (u < minU) minU = u;
-      if (u > maxU) maxU = u;
-      if (v < minV) minV = v;
-      if (v > maxV) maxV = v;
-    }
-    const du = (maxU - minU) || 1;
-    const dv = (maxV - minV) || 1;
+    // 1) UV bounds normalization: map the *front glass* UV region -> [0..1]
+// (the mesh can include frame/sides/backfaces; using global UV bounds crops the UI)
+const fb = computeFrontGlassUvBounds(mesh);
+let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
+
+if (fb) {
+  ({ minU, maxU, minV, maxV } = fb);
+} else {
+  for (let i = 0; i < uvCount; i++) {
+    const u = uva[i * 2];
+    const v = uva[i * 2 + 1];
+    if (u < minU) minU = u;
+    if (u > maxU) maxU = u;
+    if (v < minV) minV = v;
+    if (v > maxV) maxV = v;
+  }
+}
+
+const du = (maxU - minU) || 1;
+const dv = (maxV - minV) || 1;
 
     const bounds = new THREE.Matrix3();
     bounds.set(
