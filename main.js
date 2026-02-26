@@ -1051,107 +1051,9 @@ loader.load(
     if (state.capsuleLid) state.capsuleGroup.add(state.capsuleLid.clone(false));
 
     // Screens
-    // --- Знаходимо старі меші і ховаємо їх ---
-    const oldLid = gltf.scene.getObjectByName('screen_lid');
-    const oldName = gltf.scene.getObjectByName('screen_name');
-    const oldAvatar = gltf.scene.getObjectByName('screen_avatar');
-    if (oldLid) oldLid.visible = false;
-    if (oldName) oldName.visible = false;
-    if (oldAvatar) oldAvatar.visible = false;
-
-    // --- Знаходимо батьків для прив'язки нових екранів ---
-    // screen_lid — прив'язуємо до capsule_lid щоб рухався з кришкою
-    const lidParent = gltf.scene.getObjectByName('capsule_lid') || oldLid?.parent || gltf.scene;
-    // screen_name і screen_avatar — прив'язуємо до capsule_base
-    const baseParent = gltf.scene.getObjectByName('capsule_base') || oldName?.parent?.parent || gltf.scene;
-
-    // --- Функція створення нового екрану ---
-    function makeScreenPlane(width, height, parent, localPos, localRot) {
-      const geo = new THREE.PlaneGeometry(width, height);
-      const mat = new THREE.MeshStandardMaterial({
-        color: 0x000000,
-        roughness: 0.1,
-        metalness: 0.3,
-        emissive: 0x000000,
-        emissiveIntensity: 1,
-        transparent: false,
-        depthWrite: true,
-      });
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.position.set(localPos.x, localPos.y, localPos.z);
-      if (localRot) mesh.rotation.set(localRot.x || 0, localRot.y || 0, localRot.z || 0);
-      parent.add(mesh);
-      return mesh;
-    }
-
-    // --- Рахуємо розміри боксу щоб правильно розмістити екрани ---
-    gltf.scene.updateWorldMatrix(true, true);
-    const capsuleBox = new THREE.Box3().setFromObject(gltf.scene);
-    const capsuleSize = capsuleBox.getSize(new THREE.Vector3());
-    const capsuleCenter = capsuleBox.getCenter(new THREE.Vector3());
-
-    // Ширина і висота боксу
-    const bW = capsuleSize.x; // ширина
-    const bH = capsuleSize.y; // висота  
-    const bD = capsuleSize.z; // глибина
-
-    console.info('[screens] capsule size:', bW.toFixed(3), bH.toFixed(3), bD.toFixed(3));
-    console.info('[screens] capsule center:', capsuleCenter.x.toFixed(3), capsuleCenter.y.toFixed(3), capsuleCenter.z.toFixed(3));
-
-    // Розміри екранів відносно боксу
-    const screenW = bW * 0.45;    // ширина name/avatar екрану
-    const screenH = bH * 0.15;    // висота name екрану
-    const avatarH = bH * 0.18;    // висота avatar екрану
-    const lidW = bW * 0.35;       // ширина lid екрану
-    const lidH = bH * 0.08;       // висота lid екрану
-
-    // Z-позиція фронтальних екранів (трохи перед поверхнею боксу)
-    const frontZ = capsuleSize.z * 0.5 + 0.01;
-
-    // Y-позиції для name і avatar на передній панелі
-    // Базова панель займає нижню половину боксу
-    const nameY  = capsuleCenter.y - bH * 0.05;   // трохи вище центру нижньої панелі
-    const avatarY = capsuleCenter.y - bH * 0.26;  // нижче name
-
-    // Нові меші екранів
-    state.screens.name = makeScreenPlane(
-      screenW, screenH,
-      baseParent,
-      { x: 0, y: nameY, z: frontZ },
-      { x: 0, y: 0, z: 0 }
-    );
-
-    state.screens.avatar = makeScreenPlane(
-      screenW, avatarH,
-      baseParent,
-      { x: 0, y: avatarY, z: frontZ },
-      { x: 0, y: 0, z: 0 }
-    );
-
-    // Lid екран — на кришці, горизонтальний
-    // Кришка знаходиться у верхній частині, тому Y відносно lidParent = невелике
-    state.screens.lid = makeScreenPlane(
-      lidW, lidH,
-      lidParent,
-      { x: 0, y: 0, z: 0 },  // центр батька кришки
-      { x: 0, y: 0, z: 0 }
-    );
-
-    // Debug helpers
-    window._screens = state.screens;
-    window._info = () => {
-      ['lid','name','avatar'].forEach(k => {
-        const s = state.screens[k];
-        if (!s) return;
-        const wp = new THREE.Vector3();
-        s.getWorldPosition(wp);
-        console.log('screen_' + k + ' | worldPos: x=' + wp.x.toFixed(3) + ', y=' + wp.y.toFixed(3) + ', z=' + wp.z.toFixed(3) + ' | localPos: x=' + s.position.x.toFixed(3) + ', y=' + s.position.y.toFixed(3) + ', z=' + s.position.z.toFixed(3));
-      });
-    };
-    window._move = (k, dx, dy, dz) => { const s=state.screens[k]; if(!s) return; s.position.x+=dx||0; s.position.y+=dy||0; s.position.z+=dz||0; window._info(); };
-    window._size = (k, w, h) => { const s=state.screens[k]; if(!s) return; s.geometry.dispose(); s.geometry=new THREE.PlaneGeometry(w,h); console.log('screen_'+k+' size ->',w,h); };
-    setTimeout(() => window._info(), 300);
-    // --- End screen setup ---
+    state.screens.lid = gltf.scene.getObjectByName('screen_lid');
+    state.screens.name = gltf.scene.getObjectByName('screen_name');
+    state.screens.avatar = gltf.scene.getObjectByName('screen_avatar');
 
     // Lid pose setup
     if (state.lidBone || state.lidControl) {
@@ -1359,15 +1261,28 @@ function easeOutCubic(t) {
 function applyTextureOrientation(tex, kind = 'default') {
   if (!tex) return tex;
 
-  // Нові програмні PlaneGeometry екрани мають стандартні UV (flipY=true, без rotation)
-  // Тому просто скидаємо всі трансформи
-  tex.flipY = true;
+  // IMPORTANT: canvases applied to GLTF meshes must use flipY=false (same as glTF textures),
+  // otherwise text/icons appear upside-down on screen_* meshes.
+  tex.flipY = false;
+
   tex.center.set(0.5, 0.5);
-  tex.rotation = 0;
+  tex.rotation = -Math.PI / 2; // GLB screens in this model are UV-rotated 90deg
   tex.wrapS = THREE.ClampToEdgeWrapping;
   tex.wrapT = THREE.ClampToEdgeWrapping;
   tex.repeat.set(1, 1);
   tex.offset.set(0, 0);
+
+  // Lid screen UV in this GLB is mirrored relative to side screens.
+  // IMPORTANT: negative repeat requires RepeatWrapping (with Clamp it can sample edge color -> blank screen on some GPUs).
+  if (kind === 'lid') {
+    // Lid screen UV is opposite to the side screens in this GLB.
+    // Use +90deg (instead of the shared -90deg) + Y mirror to keep the lid display upright.
+    tex.rotation = Math.PI / 2;
+    tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.y = -1;
+    tex.offset.y = 1;
+  }
+
   tex.needsUpdate = true;
   return tex;
 }
@@ -1704,349 +1619,280 @@ function drawLockGlyph(ctx, x, y, size, progressClosed) {
 }
 
 function drawLidScreenCanvas(ctx, w, h, time) {
+  // LID SCREEN FIX: current lid UVs display text mirrored horizontally,
+  // so we pre-flip the canvas once here to make the final screen readable.
   ctx.save();
+  ctx.translate(w, 0);
+  ctx.scale(-1, 1);
 
-  // Background
-  ctx.clearRect(0, 0, w, h);
-  const bg = ctx.createLinearGradient(0, 0, w, h);
-  bg.addColorStop(0, 'rgba(4,10,20,0.98)');
-  bg.addColorStop(1, 'rgba(8,16,28,0.98)');
-  ctx.fillStyle = bg;
-  roundRect(ctx, 0, 0, w, h, 20);
-  ctx.fill();
+  drawScreenGlassBg(ctx, w, h, {
+    radius: 44,
+    border: 4,
+    glow: 0.26,
+    accentA: 'rgba(111,228,255,0.48)',
+    accentB: 'rgba(123,134,255,0.28)',
+    inner: 'rgba(7,11,17,0.92)',
+  });
+  drawTabletBezelChrome(ctx, w, h, time, {
+    radius: 44,
+    outerPad: 2,
+    innerPad: 12,
+    leftButtons: 4,
+    rightButtons: 3,
+    topTabs: true,
+    bottomDock: true,
+  });
 
-  // Scanlines
-  ctx.save();
-  roundRect(ctx, 0, 0, w, h, 20);
-  ctx.clip();
-  for (let y = 0; y < h; y += 4) {
-    ctx.fillStyle = 'rgba(0,0,0,0.18)';
-    ctx.fillRect(0, y, w, 2);
-  }
-  ctx.restore();
+  // Small device header chips / indicators (cosmic tablet feel)
+  drawUiPill(ctx, w * 0.08, h * 0.10, w * 0.14, 28, 'SYS', { active: true, align: 'center' });
+  drawUiPill(ctx, w * 0.24, h * 0.10, w * 0.16, 28, 'LOCK', { active: state.sealed || state.sealAnimPlaying });
+  drawUiPill(ctx, w * 0.78, h * 0.10, w * 0.10, 28, 'TX', { active: true });
 
-  // Top cyan accent line
-  const topGrad = ctx.createLinearGradient(0, 0, w, 0);
-  topGrad.addColorStop(0, 'rgba(0,255,220,0)');
-  topGrad.addColorStop(0.3, 'rgba(0,255,220,0.9)');
-  topGrad.addColorStop(0.7, 'rgba(80,180,255,0.9)');
-  topGrad.addColorStop(1, 'rgba(80,180,255,0)');
-  ctx.fillStyle = topGrad;
-  ctx.fillRect(w * 0.1, 6, w * 0.8, 3);
-
-  // Status label top-left
-  ctx.font = '700 18px monospace';
-  ctx.fillStyle = 'rgba(0,255,200,0.55)';
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'top';
-  ctx.fillText('TGE-CAPSULE', 28, 22);
-
-  // Status top-right
-  const statusLabel = state.sealed ? 'SEALED' : (state.sealAnimPlaying ? 'LOCKING' : 'ACTIVE');
-  const statusColor = state.sealed ? '#ff4466' : (state.sealAnimPlaying ? '#ffaa00' : '#00ffcc');
-  ctx.font = '700 18px monospace';
-  ctx.fillStyle = statusColor;
-  ctx.textAlign = 'right';
-  ctx.fillText(statusLabel, w - 28, 22);
-
-  // Pulse dot next to status
-  const dotAlpha = state.sealed ? 1 : (0.5 + Math.sin(time * 5) * 0.5);
-  ctx.beginPath();
-  ctx.arc(w - 18, 31, 5, 0, Math.PI * 2);
-  ctx.fillStyle = statusColor.replace(')', `,${dotAlpha.toFixed(2)})`).replace('rgb', 'rgba').replace('#ff4466', `rgba(255,68,102,${dotAlpha.toFixed(2)})`).replace('#ffaa00', `rgba(255,170,0,${dotAlpha.toFixed(2)})`).replace('#00ffcc', `rgba(0,255,204,${dotAlpha.toFixed(2)})`);
-  ctx.fill();
-
-  // Divider
-  ctx.strokeStyle = 'rgba(0,200,180,0.2)';
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(24, 54);
-  ctx.lineTo(w - 24, 54);
-  ctx.stroke();
-
-  // Big status text center
-  const bigLabel = state.sealed ? 'LOCKED' : (state.sealAnimPlaying ? 'SEALING...' : 'UNLOCKED');
-  const bigGrad = ctx.createLinearGradient(0, h * 0.3, w, h * 0.6);
-  if (state.sealed) {
-    bigGrad.addColorStop(0, '#ff6688');
-    bigGrad.addColorStop(1, '#ff2244');
-  } else if (state.sealAnimPlaying) {
-    bigGrad.addColorStop(0, '#ffcc44');
-    bigGrad.addColorStop(1, '#ff8800');
-  } else {
-    bigGrad.addColorStop(0, '#00ffcc');
-    bigGrad.addColorStop(1, '#44aaff');
-  }
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.font = '900 72px Inter, monospace';
-  ctx.fillStyle = bigGrad;
-  ctx.shadowColor = state.sealed ? 'rgba(255,50,80,0.6)' : 'rgba(0,255,200,0.6)';
-  ctx.shadowBlur = 24;
-  ctx.fillText(bigLabel, w / 2, h * 0.47);
-  ctx.shadowBlur = 0;
-
-  // Progress bar
   const closeP = 1 - clamp01(state.lidAnimT);
   const sealP = state.sealAnimPlaying ? closeP : (state.sealed ? 1 : 0);
-  const fillP = state.sealed ? 1 : (state.sealAnimPlaying ? easeOutCubic(closeP) : 0.12 + Math.sin(time * 1.8) * 0.04);
-  const barX = w * 0.12, barY = h * 0.72, barW = w * 0.76, barH = 18;
+  const x = w * 0.22;
+  const y = h * 0.5;
+  drawLockGlyph(ctx, x, y, h * 0.55, sealP);
 
+  const status = state.sealed ? 'SEALED' : (state.sealAnimPlaying ? 'LOCKING…' : 'UNLOCKED');
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+
+  const titleGrad = ctx.createLinearGradient(w * 0.36, 0, w * 0.92, 0);
+  if (state.sealed) {
+    titleGrad.addColorStop(0, '#d7f2ff');
+    titleGrad.addColorStop(1, '#8ad5ff');
+  } else {
+    titleGrad.addColorStop(0, '#c8ffea');
+    titleGrad.addColorStop(1, '#83ffd0');
+  }
+  ctx.fillStyle = titleGrad;
+  ctx.font = '800 60px Inter, sans-serif';
+  ctx.fillText(status, w * 0.36, h * 0.42);
+
+  ctx.font = '600 24px Inter, sans-serif';
+  ctx.fillStyle = 'rgba(211,233,255,0.72)';
+  ctx.fillText('TGE CAPSULE SECURITY', w * 0.36, h * 0.62);
+
+  const barX = w * 0.36, barY = h * 0.73, barW = w * 0.5, barH = 26;
   ctx.fillStyle = 'rgba(255,255,255,0.06)';
-  roundRect(ctx, barX, barY, barW, barH, 9);
+  roundRect(ctx, barX, barY, barW, barH, 13);
   ctx.fill();
 
-  const barGrad = ctx.createLinearGradient(barX, barY, barX + barW, barY);
-  barGrad.addColorStop(0, state.sealed ? 'rgba(255,68,102,0.9)' : 'rgba(0,255,200,0.9)');
-  barGrad.addColorStop(1, state.sealed ? 'rgba(200,20,60,0.9)' : 'rgba(60,140,255,0.9)');
-  ctx.fillStyle = barGrad;
-  roundRect(ctx, barX + 2, barY + 2, Math.max(8, (barW - 4) * clamp01(fillP)), barH - 4, 7);
+  const fillP = state.sealed ? 1 : (state.sealAnimPlaying ? easeOutCubic(closeP) : 0.18 + Math.sin(time * 2.3) * 0.03);
+  const fillGrad = ctx.createLinearGradient(barX, barY, barX + barW, barY);
+  fillGrad.addColorStop(0, state.sealed ? 'rgba(120,214,255,0.95)' : 'rgba(111,255,203,0.95)');
+  fillGrad.addColorStop(1, 'rgba(125,136,255,0.9)');
+  ctx.fillStyle = fillGrad;
+  roundRect(ctx, barX + 2, barY + 2, Math.max(10, (barW - 4) * clamp01(fillP)), barH - 4, 11);
   ctx.fill();
 
-  // Sweep shine on bar
-  const sweepX = ((time * 200) % (barW + 100)) - 50;
+  const sweepX = ((time * 180) % (barW + 120)) - 60;
   ctx.save();
-  roundRect(ctx, barX + 2, barY + 2, barW - 4, barH - 4, 7);
+  roundRect(ctx, barX + 2, barY + 2, barW - 4, barH - 4, 11);
   ctx.clip();
-  const sw = ctx.createLinearGradient(barX + sweepX - 30, barY, barX + sweepX + 30, barY);
-  sw.addColorStop(0, 'rgba(255,255,255,0)');
-  sw.addColorStop(0.5, 'rgba(255,255,255,0.4)');
-  sw.addColorStop(1, 'rgba(255,255,255,0)');
-  ctx.fillStyle = sw;
+  const sweep = ctx.createLinearGradient(barX + sweepX - 40, barY, barX + sweepX + 40, barY);
+  sweep.addColorStop(0, 'rgba(255,255,255,0)');
+  sweep.addColorStop(0.5, 'rgba(255,255,255,0.38)');
+  sweep.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = sweep;
   ctx.fillRect(barX, barY, barW, barH);
   ctx.restore();
 
-  // Bar label
-  ctx.font = '600 14px monospace';
-  ctx.fillStyle = 'rgba(180,220,255,0.5)';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'top';
-  ctx.fillText('SECURITY LEVEL ' + Math.round(fillP * 100) + '%', w / 2, barY + barH + 10);
+  // restore pre-flip wrapper
+  // Tiny footer control buttons
+  const btnBaseY = h * 0.82;
+  drawUiPill(ctx, w * 0.10, btnBaseY, w * 0.11, 24, 'A1', { active: true, font: '700 11px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.22, btnBaseY, w * 0.11, 24, 'A2', { font: '700 11px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.84, btnBaseY, w * 0.10, 24, 'OK', { active: state.sealed, font: '700 11px Inter, sans-serif' });
 
-  // Bottom accent line
-  const botGrad = ctx.createLinearGradient(0, 0, w, 0);
-  botGrad.addColorStop(0, 'rgba(80,180,255,0)');
-  botGrad.addColorStop(0.5, 'rgba(80,180,255,0.5)');
-  botGrad.addColorStop(1, 'rgba(80,180,255,0)');
-  ctx.fillStyle = botGrad;
-  ctx.fillRect(w * 0.1, h - 9, w * 0.8, 3);
-
-  ctx.restore(); // end pre-flip
+  ctx.restore();
 }
 
 function drawNameScreenCanvas(ctx, w, h, time) {
-  const nick = (state.nickname || 'PLAYER').toUpperCase().slice(0, 20);
+  const nick = (state.nickname || 'PLAYER').slice(0, 24);
 
-  // Background
-  ctx.clearRect(0, 0, w, h);
-  const bg = ctx.createLinearGradient(0, 0, 0, h);
-  bg.addColorStop(0, 'rgba(5,10,22,0.98)');
-  bg.addColorStop(1, 'rgba(8,14,28,0.98)');
-  ctx.fillStyle = bg;
-  roundRect(ctx, 0, 0, w, h, 16);
-  ctx.fill();
+  drawScreenGlassBg(ctx, w, h, {
+    radius: 36,
+    border: 3,
+    glow: 0.16,
+    accentA: 'rgba(130,220,255,0.3)',
+    accentB: 'rgba(123,134,255,0.2)',
+    inner: 'rgba(10,14,22,0.92)',
+  });
+  drawTabletBezelChrome(ctx, w, h, time, {
+    radius: 36,
+    outerPad: 2,
+    innerPad: 12,
+    leftButtons: 3,
+    rightButtons: 4,
+    topTabs: true,
+    bottomDock: true,
+  });
 
-  // Scanlines
-  ctx.save();
-  roundRect(ctx, 0, 0, w, h, 16);
-  ctx.clip();
-  for (let y = 0; y < h; y += 4) {
-    ctx.fillStyle = 'rgba(0,0,0,0.15)';
-    ctx.fillRect(0, y, w, 2);
+  // Header system pills / signal bars
+  drawUiPill(ctx, 26, 18, 118, 22, 'IDENT', { active: true, align: 'left' });
+  drawUiPill(ctx, 150, 18, 110, 22, 'SECURE', { active: true, align: 'left' });
+  const sigX = w - 170, sigY = 20;
+  for (let i = 0; i < 5; i++) {
+    const bh = 4 + i * 3;
+    ctx.fillStyle = `rgba(111,228,255,${(0.18 + 0.14 * i + 0.08 * Math.sin(time * 3 + i)).toFixed(3)})`;
+    roundRect(ctx, sigX + i * 12, sigY + (18 - bh), 8, bh, 3);
+    ctx.fill();
   }
 
-  // Moving horizontal glow band
-  const bandY = ((time * 60) % (h + 60)) - 30;
-  const band = ctx.createLinearGradient(0, bandY, 0, bandY + 40);
-  band.addColorStop(0, 'rgba(0,200,255,0)');
-  band.addColorStop(0.5, 'rgba(0,200,255,0.06)');
-  band.addColorStop(1, 'rgba(0,200,255,0)');
-  ctx.fillStyle = band;
-  ctx.fillRect(0, bandY, w, 40);
+  ctx.save();
+  roundRect(ctx, 8, 8, w - 16, h - 16, 32);
+  ctx.clip();
+
+  for (let i = 0; i < 9; i++) {
+    const yy = ((time * 42 + i * 40) % (h + 80)) - 40;
+    const g = ctx.createLinearGradient(0, yy, 0, yy + 24);
+    g.addColorStop(0, 'rgba(0,0,0,0)');
+    g.addColorStop(0.5, 'rgba(120,210,255,0.10)');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, yy, w, 24);
+  }
+
+  const sweepX = ((time * 240) % (w + 240)) - 120;
+  const sweep = ctx.createLinearGradient(sweepX - 100, 0, sweepX + 100, 0);
+  sweep.addColorStop(0, 'rgba(255,255,255,0)');
+  sweep.addColorStop(0.5, 'rgba(170,235,255,0.18)');
+  sweep.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = sweep;
+  ctx.fillRect(0, 0, w, h);
   ctx.restore();
 
-  // Top accent
-  const topGrad = ctx.createLinearGradient(0, 0, w, 0);
-  topGrad.addColorStop(0, 'rgba(80,180,255,0)');
-  topGrad.addColorStop(0.5, 'rgba(80,180,255,0.8)');
-  topGrad.addColorStop(1, 'rgba(80,180,255,0)');
-  ctx.fillStyle = topGrad;
-  ctx.fillRect(w * 0.15, 5, w * 0.7, 2);
-
-  // Label above name
-  ctx.font = '600 14px monospace';
-  ctx.fillStyle = 'rgba(0,200,255,0.5)';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText('IDENTITY', w / 2, h * 0.22);
 
-  // Corner brackets
-  const bx = w * 0.15, by = h * 0.3, bw = w * 0.7, bh = h * 0.45;
-  const bcLen = 16;
-  ctx.strokeStyle = 'rgba(0,200,255,0.4)';
-  ctx.lineWidth = 2;
-  // top-left
-  ctx.beginPath(); ctx.moveTo(bx, by + bcLen); ctx.lineTo(bx, by); ctx.lineTo(bx + bcLen, by); ctx.stroke();
-  // top-right
-  ctx.beginPath(); ctx.moveTo(bx + bw - bcLen, by); ctx.lineTo(bx + bw, by); ctx.lineTo(bx + bw, by + bcLen); ctx.stroke();
-  // bottom-left
-  ctx.beginPath(); ctx.moveTo(bx, by + bh - bcLen); ctx.lineTo(bx, by + bh); ctx.lineTo(bx + bcLen, by + bh); ctx.stroke();
-  // bottom-right
-  ctx.beginPath(); ctx.moveTo(bx + bw - bcLen, by + bh); ctx.lineTo(bx + bw, by + bh); ctx.lineTo(bx + bw, by + bh - bcLen); ctx.stroke();
+  let size = 92;
+  if (nick.length > 14) size = 72;
+  if (nick.length > 18) size = 58;
 
-  // Nickname text
-  let fontSize = 80;
-  if (nick.length > 10) fontSize = 64;
-  if (nick.length > 14) fontSize = 52;
-  if (nick.length > 18) fontSize = 42;
-
-  const pulse = 0.97 + Math.sin(time * 2.5) * 0.03;
+  const pulse = 0.92 + Math.sin(time * 3.8) * 0.04;
   const nameGrad = ctx.createLinearGradient(0, 0, w, 0);
-  nameGrad.addColorStop(0, '#44ddff');
-  nameGrad.addColorStop(0.5, '#ffffff');
-  nameGrad.addColorStop(1, '#8888ff');
+  nameGrad.addColorStop(0, '#e8f8ff');
+  nameGrad.addColorStop(0.45, '#b8eeff');
+  nameGrad.addColorStop(1, '#9aaeff');
 
-  ctx.font = `900 ${Math.round(fontSize * pulse)}px Inter, sans-serif`;
+  ctx.shadowColor = 'rgba(118,220,255,0.35)';
+  ctx.shadowBlur = 18;
   ctx.fillStyle = nameGrad;
-  ctx.shadowColor = 'rgba(0,200,255,0.7)';
-  ctx.shadowBlur = 20;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(nick, w / 2, h * 0.52);
+  ctx.font = `800 ${Math.round(size * pulse)}px Inter, sans-serif`;
+  ctx.fillText(nick, w / 2, h * 0.54);
+
   ctx.shadowBlur = 0;
+  ctx.font = '600 18px Inter, sans-serif';
+  ctx.fillStyle = 'rgba(197,221,255,0.56)';
+  ctx.fillText('IDENTITY LINKED', w / 2, h * 0.2);
 
-  // Bottom status
-  ctx.font = '500 13px monospace';
-  ctx.fillStyle = 'rgba(100,180,255,0.45)';
-  ctx.fillText('VERIFIED  ·  CAPSULE LINKED', w / 2, h * 0.82);
-
-  // Bottom accent
-  ctx.fillStyle = topGrad;
-  ctx.fillRect(w * 0.15, h - 7, w * 0.7, 2);
+  // Bottom functional buttons / labels
+  drawUiPill(ctx, w * 0.12, h * 0.78, w * 0.12, 24, 'SCAN', { active: true, font: '700 11px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.26, h * 0.78, w * 0.12, 24, 'SYNC', { font: '700 11px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.62, h * 0.78, w * 0.12, 24, 'NODE', { font: '700 11px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.76, h * 0.78, w * 0.12, 24, 'OK', { active: true, font: '700 11px Inter, sans-serif' });
 }
 
 function drawAvatarScreenCanvas(ctx, w, h, time) {
-  // Background
-  ctx.clearRect(0, 0, w, h);
-  const bg = ctx.createLinearGradient(0, 0, 0, h);
-  bg.addColorStop(0, 'rgba(4,10,20,0.98)');
-  bg.addColorStop(1, 'rgba(8,16,28,0.98)');
-  ctx.fillStyle = bg;
-  roundRect(ctx, 0, 0, w, h, 16);
-  ctx.fill();
+  drawScreenGlassBg(ctx, w, h, {
+    radius: 56,
+    border: 3,
+    glow: 0.2,
+    accentA: 'rgba(111,228,255,0.26)',
+    accentB: 'rgba(123,134,255,0.18)',
+    inner: 'rgba(10,14,22,0.94)',
+  });
+  drawTabletBezelChrome(ctx, w, h, time, {
+    radius: 56,
+    outerPad: 2,
+    innerPad: 14,
+    leftButtons: 5,
+    rightButtons: 5,
+    topTabs: true,
+    bottomDock: true,
+  });
 
-  // Scanlines
-  ctx.save();
-  roundRect(ctx, 0, 0, w, h, 16);
-  ctx.clip();
-  for (let y = 0; y < h; y += 4) {
-    ctx.fillStyle = 'rgba(0,0,0,0.15)';
-    ctx.fillRect(0, y, w, 2);
-  }
-  ctx.restore();
+  // Top bar controls / mini buttons
+  drawUiPill(ctx, w * 0.08, h * 0.05, w * 0.18, 24, 'VISOR', { active: true, align: 'left', font: '700 11px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.28, h * 0.05, w * 0.14, 24, 'CAM', { font: '700 11px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.72, h * 0.05, w * 0.08, 24, 'A', { active: true, font: '700 11px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.82, h * 0.05, w * 0.10, 24, 'REC', { active: !!state.avatarImgLoaded, font: '700 11px Inter, sans-serif' });
 
-  // Top accent
-  const topGrad = ctx.createLinearGradient(0, 0, w, 0);
-  topGrad.addColorStop(0, 'rgba(100,100,255,0)');
-  topGrad.addColorStop(0.5, 'rgba(100,140,255,0.8)');
-  topGrad.addColorStop(1, 'rgba(100,100,255,0)');
-  ctx.fillStyle = topGrad;
-  ctx.fillRect(w * 0.1, 5, w * 0.8, 2);
+  const pad = 48;
+  const innerX = pad;
+  const innerY = pad;
+  const innerW = w - pad * 2;
+  const innerH = h - pad * 2;
 
-  // Avatar image area
-  const pad = 20;
-  const imgX = pad;
-  const imgY = pad + 12;
-  const imgW = w - pad * 2;
-  const imgH = h - pad * 2 - 28;
-
-  // Frame border with pulse
-  const borderAlpha = 0.3 + Math.sin(time * 3) * 0.15;
-  ctx.strokeStyle = `rgba(100,160,255,${borderAlpha.toFixed(2)})`;
-  ctx.lineWidth = 2;
-  roundRect(ctx, imgX, imgY, imgW, imgH, 10);
+  const borderPulse = 0.65 + Math.sin(time * 4.5) * 0.18;
+  ctx.strokeStyle = `rgba(140,220,255,${(0.16 + borderPulse * 0.28).toFixed(3)})`;
+  ctx.lineWidth = 4;
+  roundRect(ctx, innerX, innerY, innerW, innerH, 44);
   ctx.stroke();
 
-  // Clip and draw avatar
-  roundRect(ctx, imgX + 2, imgY + 2, imgW - 4, imgH - 4, 8);
+  roundRect(ctx, innerX, innerY, innerW, innerH, 44);
   ctx.save();
   ctx.clip();
 
   const img = state.avatarImgEl;
   if (img && state.avatarImgLoaded) {
-    const floatX = Math.sin(time * 1.2) * 4;
-    const floatY = Math.cos(time * 1.5) * 3;
-    const scale = Math.max(imgW / img.width, imgH / img.height) * 1.02;
+    const floatX = Math.sin(time * 1.6) * 7;
+    const floatY = Math.cos(time * 1.9) * 6;
+    const scale = Math.max(innerW / img.width, innerH / img.height) * (1.03 + Math.sin(time * 1.4) * 0.01);
     const dw = img.width * scale;
     const dh = img.height * scale;
-    const dx = imgX + (imgW - dw) / 2 + floatX;
-    const dy = imgY + (imgH - dh) / 2 + floatY;
+    const dx = innerX + (innerW - dw) / 2 + floatX;
+    const dy = innerY + (innerH - dh) / 2 + floatY;
     ctx.drawImage(img, dx, dy, dw, dh);
-
-    // Subtle color overlay
-    const overlay = ctx.createLinearGradient(imgX, imgY, imgX, imgY + imgH);
-    overlay.addColorStop(0, 'rgba(40,80,160,0.15)');
-    overlay.addColorStop(1, 'rgba(0,0,0,0.3)');
-    ctx.fillStyle = overlay;
-    ctx.fillRect(imgX, imgY, imgW, imgH);
   } else {
-    // Placeholder
-    const ph = ctx.createLinearGradient(imgX, imgY, imgX + imgW, imgY + imgH);
-    ph.addColorStop(0, 'rgba(20,30,50,0.95)');
-    ph.addColorStop(1, 'rgba(10,15,30,0.95)');
+    const ph = ctx.createLinearGradient(innerX, innerY, innerX + innerW, innerY + innerH);
+    ph.addColorStop(0, 'rgba(28,38,56,0.95)');
+    ph.addColorStop(1, 'rgba(14,20,30,0.95)');
     ctx.fillStyle = ph;
-    ctx.fillRect(imgX, imgY, imgW, imgH);
+    ctx.fillRect(innerX, innerY, innerW, innerH);
 
-    // Avatar icon placeholder
-    ctx.font = '300 48px Inter, sans-serif';
-    ctx.fillStyle = 'rgba(100,150,255,0.3)';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('◉', w / 2, h / 2 - 10);
-    ctx.font = '500 16px monospace';
-    ctx.fillStyle = 'rgba(100,150,255,0.35)';
-    ctx.fillText('NO AVATAR', w / 2, h / 2 + 30);
+    ctx.font = '700 30px Inter, sans-serif';
+    ctx.fillStyle = 'rgba(200,220,255,0.7)';
+    ctx.fillText('AVATAR', w / 2, h / 2);
   }
 
-  // Sweep scan line
-  const sweepY = ((time * 120) % (imgH + 80)) - 40;
-  const sg = ctx.createLinearGradient(0, imgY + sweepY - 20, 0, imgY + sweepY + 20);
+  const sweepY = ((time * 180) % (innerH + 160)) - 80;
+  const sg = ctx.createLinearGradient(0, innerY + sweepY - 40, 0, innerY + sweepY + 40);
   sg.addColorStop(0, 'rgba(255,255,255,0)');
-  sg.addColorStop(0.5, 'rgba(140,200,255,0.12)');
+  sg.addColorStop(0.5, 'rgba(170,232,255,0.16)');
   sg.addColorStop(1, 'rgba(255,255,255,0)');
   ctx.fillStyle = sg;
-  ctx.fillRect(imgX, imgY, imgW, imgH);
+  ctx.fillRect(innerX, innerY, innerW, innerH);
   ctx.restore();
 
-  // Corner brackets over image
-  const cLen = 14;
-  ctx.strokeStyle = 'rgba(140,200,255,0.7)';
-  ctx.lineWidth = 2.5;
+  ctx.strokeStyle = 'rgba(165,236,255,0.55)';
+  ctx.lineWidth = 5;
+  const c = 26;
   const corners = [
-    [imgX + 6, imgY + 6, 1, 1],
-    [imgX + imgW - 6, imgY + 6, -1, 1],
-    [imgX + 6, imgY + imgH - 6, 1, -1],
-    [imgX + imgW - 6, imgY + imgH - 6, -1, -1],
+    [innerX + 10, innerY + 10, 1, 1],
+    [innerX + innerW - 10, innerY + 10, -1, 1],
+    [innerX + 10, innerY + innerH - 10, 1, -1],
+    [innerX + innerW - 10, innerY + innerH - 10, -1, -1],
   ];
   for (const [cx, cy, sx, sy] of corners) {
     ctx.beginPath();
-    ctx.moveTo(cx, cy + sy * cLen);
+    ctx.moveTo(cx, cy + sy * c);
     ctx.lineTo(cx, cy);
-    ctx.lineTo(cx + sx * cLen, cy);
+    ctx.lineTo(cx + sx * c, cy);
     ctx.stroke();
   }
 
-  // Bottom label
-  ctx.font = '600 13px monospace';
-  ctx.fillStyle = 'rgba(100,160,255,0.45)';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  const recLabel = state.avatarImgLoaded ? '● REC' : '○ STANDBY';
-  const recColor = state.avatarImgLoaded ? 'rgba(255,80,80,0.7)' : 'rgba(100,160,255,0.45)';
-  ctx.fillStyle = recColor;
-  ctx.fillText(recLabel, w / 2, h - 10);
+  // Bottom docking controls / status buttons (tablet hardware style)
+  const dockY = h - 42;
+  drawUiPill(ctx, w * 0.10, dockY, w * 0.16, 22, 'GRID', { font: '700 10px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.28, dockY, w * 0.16, 22, 'ZOOM', { active: true, font: '700 10px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.56, dockY, w * 0.14, 22, 'HDR', { font: '700 10px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.72, dockY, w * 0.18, 22, 'SYNC OK', { active: state.avatarImgLoaded, font: '700 10px Inter, sans-serif' });
 }
-
 
 function renderDynamicScreens(force = false) {
   const hasAny = state.screens.lid || state.screens.name || state.screens.avatar;
@@ -2248,12 +2094,19 @@ function placeholderMaterial(label) {
 }
 
 function setupScreenPlaceholders() {
-  // Нові програмні екрани — просто застосовуємо чорний матеріал як плейсхолдер
-  // Реальний рендер відбувається через renderDynamicScreens()
+  if (state.screens.lid?.isMesh) {
+    state.screens.lid.material = placeholderMaterial('LOCK');
+  }
+  if (state.screens.name?.isMesh) {
+    state.screens.name.material = placeholderMaterial('NAME');
+  }
+  if (state.screens.avatar?.isMesh) {
+    state.screens.avatar.material = placeholderMaterial('AVATAR');
+  }
+
   ['lid','name','avatar'].forEach((k) => {
-    const s = state.screens[k];
-    if (!s?.isMesh) return;
-    // Не змінюємо матеріал тут — renderDynamicScreens призначить canvas текстуру
+    const m = state.screens[k]?.material;
+    if (m?.map) applyTextureOrientation(m.map, k);
   });
 }
 
