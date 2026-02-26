@@ -1056,20 +1056,43 @@ loader.load(
     state.screens.avatar = gltf.scene.getObjectByName('screen_avatar');
 
     // --- Screen parent correction + debug helpers ---
-    // Рухаємо батьківські об'єкти щоб центрувати екрани
-    // worldPos з консолі: lid=(0.43,2.86,0), name=(1.17,1.06,0), avatar=(1.13,0.46,0)
-    // Центр боксу по X ~ 0, тому зміщуємо батьків на -worldPos.x
+    // Центруємо екрани по worldPos — рухаємо батьків поки worldPos.x != 0
+    // Підбираємо рівень батька який реально керує X позицією
     setTimeout(() => {
-      if (state.screens.lid?.parent) {
-        state.screens.lid.parent.position.x -= 0.43;
-      }
-      if (state.screens.name?.parent) {
-        state.screens.name.parent.position.x -= 1.17;
-      }
-      if (state.screens.avatar?.parent) {
-        state.screens.avatar.parent.position.x -= 1.13;
-      }
-    }, 100);
+      const centerScreen = (screenObj, targetWorldX) => {
+        if (!screenObj) return;
+        // Піднімаємось по ланцюжку батьків, шукаємо того хто впливає на X
+        // Пробуємо дідуся (parent.parent) — бо батько вже зміщений але worldPos не змінився
+        const grandParent = screenObj.parent?.parent;
+        const parent = screenObj.parent;
+
+        // Спочатку скидаємо зміщення батька яке вже додали раніше
+        if (parent) parent.position.x = 0;
+
+        // Читаємо worldPos після скидання
+        const wp = new THREE.Vector3();
+        screenObj.getWorldPosition(wp);
+        const diff = targetWorldX - wp.x;
+
+        // Тепер зміщуємо батька на потрібну різницю
+        if (parent) {
+          parent.position.x += diff;
+        }
+      };
+
+      centerScreen(state.screens.lid, 0);
+      centerScreen(state.screens.name, 0);
+      centerScreen(state.screens.avatar, 0);
+
+      // Логуємо результат
+      ['lid','name','avatar'].forEach(k => {
+        const s = state.screens[k];
+        if (!s) return;
+        const wp = new THREE.Vector3();
+        s.getWorldPosition(wp);
+        console.info('[screen_' + k + '] after centering: worldPos x=' + wp.x.toFixed(4) + ', y=' + wp.y.toFixed(4) + ', z=' + wp.z.toFixed(4));
+      });
+    }, 150);
 
     // Debug helpers — доступні в консолі браузера
     window._screens = state.screens;
