@@ -2145,7 +2145,6 @@ function drawLidScreenCanvas(ctx, w, h, time) {
   ctx.fillRect(barX, barY, barW, barH);
   ctx.restore();
 }
-  ctx.restore();
 
 
 function drawNameScreenCanvas(ctx, w, h, time) {
