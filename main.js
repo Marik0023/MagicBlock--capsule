@@ -1424,9 +1424,8 @@ function drawTabletBezelChrome(ctx, w, h, time = 0, opts = {}) {
   ctx.lineWidth = 1;
   for (let y = innerPad + 18; y < h - innerPad - 8; y += 22) {
     ctx.beginPath();
-    // Static (no animated drift)
-    ctx.moveTo(innerPad + 8, y);
-    ctx.lineTo(w - innerPad - 8, y);
+    ctx.moveTo(innerPad + 8, y + ((time * 8) % 6));
+    ctx.lineTo(w - innerPad - 8, y + ((time * 8) % 6));
     ctx.stroke();
   }
   ctx.restore();
@@ -1495,8 +1494,7 @@ function drawTabletBezelChrome(ctx, w, h, time = 0, opts = {}) {
     for (let i = 0; i < count; i++) {
       const cy = ry + btnGap * (i + 1);
       const bx = rx + railW * 0.5;
-      // Static indicator light (no pulsing)
-      const pulse = 0.62;
+      const pulse = 0.45 + 0.35 * Math.sin(time * 2.1 + i * 0.9 + (side === 'left' ? 0.4 : 1.2));
       ctx.fillStyle = `rgba(12,18,28,0.90)`;
       ctx.beginPath();
       ctx.arc(bx, cy, railW * 0.28, 0, Math.PI * 2);
@@ -1621,87 +1619,288 @@ function drawLockGlyph(ctx, x, y, size, progressClosed) {
 }
 
 function drawLidScreenCanvas(ctx, w, h, time) {
-  // No UI/background/borders. Only the core image/content.
-  // LID SCREEN FIX: lid UVs are mirrored, so we pre-flip the canvas once here.
-  ctx.clearRect(0, 0, w, h);
-
+  // LID SCREEN FIX: current lid UVs display text mirrored horizontally,
+  // so we pre-flip the canvas once here to make the final screen readable.
   ctx.save();
   ctx.translate(w, 0);
   ctx.scale(-1, 1);
 
-  const sealP = (state.sealed || state.sealAnimPlaying) ? 1 : 0;
+  drawScreenGlassBg(ctx, w, h, {
+    radius: 44,
+    border: 4,
+    glow: 0.26,
+    accentA: 'rgba(111,228,255,0.48)',
+    accentB: 'rgba(123,134,255,0.28)',
+    inner: 'rgba(7,11,17,0.92)',
+  });
+  drawTabletBezelChrome(ctx, w, h, time, {
+    radius: 44,
+    outerPad: 2,
+    innerPad: 12,
+    leftButtons: 4,
+    rightButtons: 3,
+    topTabs: true,
+    bottomDock: true,
+  });
 
-  // Scale everything down 2x and center
-  const size = Math.min(w, h) * 0.28; // was ~0.55*h in the old UI
-  drawLockGlyph(ctx, w * 0.5, h * 0.5, size, sealP);
+  // Small device header chips / indicators (cosmic tablet feel)
+  drawUiPill(ctx, w * 0.08, h * 0.10, w * 0.14, 28, 'SYS', { active: true, align: 'center' });
+  drawUiPill(ctx, w * 0.24, h * 0.10, w * 0.16, 28, 'LOCK', { active: state.sealed || state.sealAnimPlaying });
+  drawUiPill(ctx, w * 0.78, h * 0.10, w * 0.10, 28, 'TX', { active: true });
 
-  // Minimal status text (also scaled down 2x)
+  const closeP = 1 - clamp01(state.lidAnimT);
+  const sealP = state.sealAnimPlaying ? closeP : (state.sealed ? 1 : 0);
+  const x = w * 0.22;
+  const y = h * 0.5;
+  drawLockGlyph(ctx, x, y, h * 0.55, sealP);
+
   const status = state.sealed ? 'SEALED' : (state.sealAnimPlaying ? 'LOCKING…' : 'UNLOCKED');
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'top';
-  ctx.shadowBlur = 0;
-  ctx.fillStyle = 'rgba(220,240,255,0.92)';
-  ctx.font = '800 30px Inter, sans-serif';
-  ctx.fillText(status, w * 0.5, h * 0.5 + size * 0.55);
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+
+  const titleGrad = ctx.createLinearGradient(w * 0.36, 0, w * 0.92, 0);
+  if (state.sealed) {
+    titleGrad.addColorStop(0, '#d7f2ff');
+    titleGrad.addColorStop(1, '#8ad5ff');
+  } else {
+    titleGrad.addColorStop(0, '#c8ffea');
+    titleGrad.addColorStop(1, '#83ffd0');
+  }
+  ctx.fillStyle = titleGrad;
+  ctx.font = '800 60px Inter, sans-serif';
+  ctx.fillText(status, w * 0.36, h * 0.42);
+
+  ctx.font = '600 24px Inter, sans-serif';
+  ctx.fillStyle = 'rgba(211,233,255,0.72)';
+  ctx.fillText('TGE CAPSULE SECURITY', w * 0.36, h * 0.62);
+
+  const barX = w * 0.36, barY = h * 0.73, barW = w * 0.5, barH = 26;
+  ctx.fillStyle = 'rgba(255,255,255,0.06)';
+  roundRect(ctx, barX, barY, barW, barH, 13);
+  ctx.fill();
+
+  const fillP = state.sealed ? 1 : (state.sealAnimPlaying ? easeOutCubic(closeP) : 0.18 + Math.sin(time * 2.3) * 0.03);
+  const fillGrad = ctx.createLinearGradient(barX, barY, barX + barW, barY);
+  fillGrad.addColorStop(0, state.sealed ? 'rgba(120,214,255,0.95)' : 'rgba(111,255,203,0.95)');
+  fillGrad.addColorStop(1, 'rgba(125,136,255,0.9)');
+  ctx.fillStyle = fillGrad;
+  roundRect(ctx, barX + 2, barY + 2, Math.max(10, (barW - 4) * clamp01(fillP)), barH - 4, 11);
+  ctx.fill();
+
+  const sweepX = ((time * 180) % (barW + 120)) - 60;
+  ctx.save();
+  roundRect(ctx, barX + 2, barY + 2, barW - 4, barH - 4, 11);
+  ctx.clip();
+  const sweep = ctx.createLinearGradient(barX + sweepX - 40, barY, barX + sweepX + 40, barY);
+  sweep.addColorStop(0, 'rgba(255,255,255,0)');
+  sweep.addColorStop(0.5, 'rgba(255,255,255,0.38)');
+  sweep.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = sweep;
+  ctx.fillRect(barX, barY, barW, barH);
+  ctx.restore();
+
+  // restore pre-flip wrapper
+  // Tiny footer control buttons
+  const btnBaseY = h * 0.82;
+  drawUiPill(ctx, w * 0.10, btnBaseY, w * 0.11, 24, 'A1', { active: true, font: '700 11px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.22, btnBaseY, w * 0.11, 24, 'A2', { font: '700 11px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.84, btnBaseY, w * 0.10, 24, 'OK', { active: state.sealed, font: '700 11px Inter, sans-serif' });
 
   ctx.restore();
 }
 
-
 function drawNameScreenCanvas(ctx, w, h, time) {
-  // No UI/background/borders. Only the core image/content.
-  ctx.clearRect(0, 0, w, h);
+  const nick = (state.nickname || 'PLAYER').slice(0, 24);
 
-  const nick = (state.nickname || '').slice(0, 24);
-  if (!nick) return;
+  drawScreenGlassBg(ctx, w, h, {
+    radius: 36,
+    border: 3,
+    glow: 0.16,
+    accentA: 'rgba(130,220,255,0.3)',
+    accentB: 'rgba(123,134,255,0.2)',
+    inner: 'rgba(10,14,22,0.92)',
+  });
+  drawTabletBezelChrome(ctx, w, h, time, {
+    radius: 36,
+    outerPad: 2,
+    innerPad: 12,
+    leftButtons: 3,
+    rightButtons: 4,
+    topTabs: true,
+    bottomDock: true,
+  });
 
-  // Scale everything down 2x and center
-  let size = 92;
-  if (nick.length > 14) size = 72;
-  if (nick.length > 18) size = 58;
-  size = Math.round(size * 0.5);
+  // Header system pills / signal bars
+  drawUiPill(ctx, 26, 18, 118, 22, 'IDENT', { active: true, align: 'left' });
+  drawUiPill(ctx, 150, 18, 110, 22, 'SECURE', { active: true, align: 'left' });
+  const sigX = w - 170, sigY = 20;
+  for (let i = 0; i < 5; i++) {
+    const bh = 4 + i * 3;
+    ctx.fillStyle = `rgba(111,228,255,${(0.18 + 0.14 * i + 0.08 * Math.sin(time * 3 + i)).toFixed(3)})`;
+    roundRect(ctx, sigX + i * 12, sigY + (18 - bh), 8, bh, 3);
+    ctx.fill();
+  }
+
+  ctx.save();
+  roundRect(ctx, 8, 8, w - 16, h - 16, 32);
+  ctx.clip();
+
+  for (let i = 0; i < 9; i++) {
+    const yy = ((time * 42 + i * 40) % (h + 80)) - 40;
+    const g = ctx.createLinearGradient(0, yy, 0, yy + 24);
+    g.addColorStop(0, 'rgba(0,0,0,0)');
+    g.addColorStop(0.5, 'rgba(120,210,255,0.10)');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, yy, w, 24);
+  }
+
+  const sweepX = ((time * 240) % (w + 240)) - 120;
+  const sweep = ctx.createLinearGradient(sweepX - 100, 0, sweepX + 100, 0);
+  sweep.addColorStop(0, 'rgba(255,255,255,0)');
+  sweep.addColorStop(0.5, 'rgba(170,235,255,0.18)');
+  sweep.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = sweep;
+  ctx.fillRect(0, 0, w, h);
+  ctx.restore();
 
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.shadowBlur = 0;
-  ctx.fillStyle = 'rgba(235,248,255,0.95)';
-  ctx.font = `800 ${size}px Inter, sans-serif`;
-  ctx.fillText(nick, w / 2, h / 2);
-}
 
+  let size = 92;
+  if (nick.length > 14) size = 72;
+  if (nick.length > 18) size = 58;
+
+  const pulse = 0.92 + Math.sin(time * 3.8) * 0.04;
+  const nameGrad = ctx.createLinearGradient(0, 0, w, 0);
+  nameGrad.addColorStop(0, '#e8f8ff');
+  nameGrad.addColorStop(0.45, '#b8eeff');
+  nameGrad.addColorStop(1, '#9aaeff');
+
+  ctx.shadowColor = 'rgba(118,220,255,0.35)';
+  ctx.shadowBlur = 18;
+  ctx.fillStyle = nameGrad;
+  ctx.font = `800 ${Math.round(size * pulse)}px Inter, sans-serif`;
+  ctx.fillText(nick, w / 2, h * 0.54);
+
+  ctx.shadowBlur = 0;
+  ctx.font = '600 18px Inter, sans-serif';
+  ctx.fillStyle = 'rgba(197,221,255,0.56)';
+  ctx.fillText('IDENTITY LINKED', w / 2, h * 0.2);
+
+  // Bottom functional buttons / labels
+  drawUiPill(ctx, w * 0.12, h * 0.78, w * 0.12, 24, 'SCAN', { active: true, font: '700 11px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.26, h * 0.78, w * 0.12, 24, 'SYNC', { font: '700 11px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.62, h * 0.78, w * 0.12, 24, 'NODE', { font: '700 11px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.76, h * 0.78, w * 0.12, 24, 'OK', { active: true, font: '700 11px Inter, sans-serif' });
+}
 
 function drawAvatarScreenCanvas(ctx, w, h, time) {
-  // No UI/background/borders. Only the image, scaled down 2x and centered.
-  ctx.clearRect(0, 0, w, h);
+  drawScreenGlassBg(ctx, w, h, {
+    radius: 56,
+    border: 3,
+    glow: 0.2,
+    accentA: 'rgba(111,228,255,0.26)',
+    accentB: 'rgba(123,134,255,0.18)',
+    inner: 'rgba(10,14,22,0.94)',
+  });
+  drawTabletBezelChrome(ctx, w, h, time, {
+    radius: 56,
+    outerPad: 2,
+    innerPad: 14,
+    leftButtons: 5,
+    rightButtons: 5,
+    topTabs: true,
+    bottomDock: true,
+  });
+
+  // Top bar controls / mini buttons
+  drawUiPill(ctx, w * 0.08, h * 0.05, w * 0.18, 24, 'VISOR', { active: true, align: 'left', font: '700 11px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.28, h * 0.05, w * 0.14, 24, 'CAM', { font: '700 11px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.72, h * 0.05, w * 0.08, 24, 'A', { active: true, font: '700 11px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.82, h * 0.05, w * 0.10, 24, 'REC', { active: !!state.avatarImgLoaded, font: '700 11px Inter, sans-serif' });
+
+  const pad = 48;
+  const innerX = pad;
+  const innerY = pad;
+  const innerW = w - pad * 2;
+  const innerH = h - pad * 2;
+
+  const borderPulse = 0.65 + Math.sin(time * 4.5) * 0.18;
+  ctx.strokeStyle = `rgba(140,220,255,${(0.16 + borderPulse * 0.28).toFixed(3)})`;
+  ctx.lineWidth = 4;
+  roundRect(ctx, innerX, innerY, innerW, innerH, 44);
+  ctx.stroke();
+
+  roundRect(ctx, innerX, innerY, innerW, innerH, 44);
+  ctx.save();
+  ctx.clip();
 
   const img = state.avatarImgEl;
-  if (!(img && state.avatarImgLoaded)) return;
+  if (img && state.avatarImgLoaded) {
+    const floatX = Math.sin(time * 1.6) * 7;
+    const floatY = Math.cos(time * 1.9) * 6;
+    const scale = Math.max(innerW / img.width, innerH / img.height) * (1.03 + Math.sin(time * 1.4) * 0.01);
+    const dw = img.width * scale;
+    const dh = img.height * scale;
+    const dx = innerX + (innerW - dw) / 2 + floatX;
+    const dy = innerY + (innerH - dh) / 2 + floatY;
+    ctx.drawImage(img, dx, dy, dw, dh);
+  } else {
+    const ph = ctx.createLinearGradient(innerX, innerY, innerX + innerW, innerY + innerH);
+    ph.addColorStop(0, 'rgba(28,38,56,0.95)');
+    ph.addColorStop(1, 'rgba(14,20,30,0.95)');
+    ctx.fillStyle = ph;
+    ctx.fillRect(innerX, innerY, innerW, innerH);
 
-  // Target box = half size of the screen (2x smaller)
-  const boxW = w * 0.5;
-  const boxH = h * 0.5;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = '700 30px Inter, sans-serif';
+    ctx.fillStyle = 'rgba(200,220,255,0.7)';
+    ctx.fillText('AVATAR', w / 2, h / 2);
+  }
 
-  // Fit the avatar into the box WITHOUT cropping (contain)
-  const scale = Math.min(boxW / img.width, boxH / img.height);
-  const dw = img.width * scale;
-  const dh = img.height * scale;
+  const sweepY = ((time * 180) % (innerH + 160)) - 80;
+  const sg = ctx.createLinearGradient(0, innerY + sweepY - 40, 0, innerY + sweepY + 40);
+  sg.addColorStop(0, 'rgba(255,255,255,0)');
+  sg.addColorStop(0.5, 'rgba(170,232,255,0.16)');
+  sg.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = sg;
+  ctx.fillRect(innerX, innerY, innerW, innerH);
+  ctx.restore();
 
-  const dx = (w - dw) / 2;
-  const dy = (h - dh) / 2;
+  ctx.strokeStyle = 'rgba(165,236,255,0.55)';
+  ctx.lineWidth = 5;
+  const c = 26;
+  const corners = [
+    [innerX + 10, innerY + 10, 1, 1],
+    [innerX + innerW - 10, innerY + 10, -1, 1],
+    [innerX + 10, innerY + innerH - 10, 1, -1],
+    [innerX + innerW - 10, innerY + innerH - 10, -1, -1],
+  ];
+  for (const [cx, cy, sx, sy] of corners) {
+    ctx.beginPath();
+    ctx.moveTo(cx, cy + sy * c);
+    ctx.lineTo(cx, cy);
+    ctx.lineTo(cx + sx * c, cy);
+    ctx.stroke();
+  }
 
-  ctx.drawImage(img, dx, dy, dw, dh);
+  // Bottom docking controls / status buttons (tablet hardware style)
+  const dockY = h - 42;
+  drawUiPill(ctx, w * 0.10, dockY, w * 0.16, 22, 'GRID', { font: '700 10px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.28, dockY, w * 0.16, 22, 'ZOOM', { active: true, font: '700 10px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.56, dockY, w * 0.14, 22, 'HDR', { font: '700 10px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.72, dockY, w * 0.18, 22, 'SYNC OK', { active: state.avatarImgLoaded, font: '700 10px Inter, sans-serif' });
 }
-
 
 function renderDynamicScreens(force = false) {
   const hasAny = state.screens.lid || state.screens.name || state.screens.avatar;
   if (!hasAny) return;
 
-  // Screen animations disabled: redraw only when explicitly forced (on state changes).
-  if (!force) return;
-
-  // Use a constant time so any time-based effects render as a static frame.
-  const now = 0;
+  const now = performance.now() * 0.001;
+  if (!force && (now - state.lastScreenFxDraw) < (1 / 30)) return;
+  state.lastScreenFxDraw = now;
 
   if (state.screens.lid?.isMesh) {
     const pack = ensureScreenFxPack('lid', 1024, 512);
@@ -1720,7 +1919,7 @@ function renderDynamicScreens(force = false) {
     if (!(state.screens.name.material && state.screens.name.material.map === pack.tex)) {
       state.screens.name.material = createScreenMaterial(pack.tex, 0x0a1220, 0.65);
     }
-    state.screens.name.material.emissiveIntensity = 0.58;
+    state.screens.name.material.emissiveIntensity = 0.58 + Math.sin(now * 3.7) * 0.06;
   }
 
   if (state.screens.avatar?.isMesh) {
@@ -1730,7 +1929,7 @@ function renderDynamicScreens(force = false) {
     if (!(state.screens.avatar.material && state.screens.avatar.material.map === pack.tex)) {
       state.screens.avatar.material = createScreenMaterial(pack.tex, 0x091523, 0.62);
     }
-    state.screens.avatar.material.emissiveIntensity = 0.55;
+    state.screens.avatar.material.emissiveIntensity = 0.55 + Math.sin(now * 3.1 + 0.8) * 0.05;
   }
 }
 
@@ -2641,9 +2840,6 @@ ui.sealBtn.addEventListener('click', () => {
   updateSealButtonState();
   ui.statusSeal.textContent = 'Sealing...';
 
-  // Update screen textures once for the sealing state (screens are static; no per-frame effects).
-  updateDynamicTextures();
-
   animateSealSequence();
 });
 
@@ -2701,7 +2897,7 @@ function animateSealSequence() {
     const spinPhase = clamp01((t - spinStart) / Math.max(1e-4, (spinEnd - spinStart)));
     state.spinAngle = state.sealSpinTargetDelta * easeInOutCubic(spinPhase);
 
-    // Screen animations disabled; keep screens static during the cinematic.
+    renderDynamicScreens();
 
     if (t < 1) {
       requestAnimationFrame(step);
@@ -2771,7 +2967,21 @@ function tick() {
     }
   }
 
-  // Dynamic electronic screens are now static (updated only when forced via updateDynamicTextures).
+  // Dynamic electronic screens (lock/name/avatar)
+  if (state.readyProfile || state.sealAnimPlaying || state.sealed) {
+    renderDynamicScreens();
+  }
+
+  // Gentle idle pulse while box is open
+  const tNow = clock.elapsedTime;
+  if (!state.sealAnimPlaying && !state.sealed) {
+    if (state.screens.name?.material) {
+      state.screens.name.material.emissiveIntensity = 0.58 + Math.sin(tNow * 2.8) * 0.05;
+    }
+    if (state.screens.avatar?.material) {
+      state.screens.avatar.material.emissiveIntensity = 0.56 + Math.sin(tNow * 2.3 + 0.7) * 0.05;
+    }
+  }
 
   controls.update();
   renderer.render(scene, camera);
