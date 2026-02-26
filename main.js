@@ -61,6 +61,7 @@ const state = {
     lid: null,
     name: null,
     avatar: null,
+    logo: null,
   },
 
   lidClosedQuat: null,
@@ -82,9 +83,12 @@ const state = {
     lid: null,
     name: null,
     avatar: null,
+    logo: null,
   },
   avatarImgEl: null,
   avatarImgLoaded: false,
+  logoImgEl: null,
+  logoImgLoaded: false,
   lastScreenFxDraw: 0,
 
   // message letter prop (flies into capsule during sealing)
@@ -1054,6 +1058,7 @@ loader.load(
     state.screens.lid = gltf.scene.getObjectByName('screen_lid');
     state.screens.name = gltf.scene.getObjectByName('screen_name');
     state.screens.avatar = gltf.scene.getObjectByName('screen_avatar');
+    state.screens.logo = gltf.scene.getObjectByName('screen_logo');
 
     // Lid pose setup
     if (state.lidBone || state.lidControl) {
@@ -1894,8 +1899,133 @@ function drawAvatarScreenCanvas(ctx, w, h, time) {
   drawUiPill(ctx, w * 0.72, dockY, w * 0.18, 22, 'SYNC OK', { active: state.avatarImgLoaded, font: '700 10px Inter, sans-serif' });
 }
 
+
+
+function drawLogoScreenCanvas(ctx, w, h, time) {
+  drawScreenGlassBg(ctx, w, h, {
+    radius: 52,
+    border: 3,
+    glow: 0.22,
+    accentA: 'rgba(111,228,255,0.28)',
+    accentB: 'rgba(123,134,255,0.20)',
+    inner: 'rgba(10,14,22,0.94)',
+  });
+  drawTabletBezelChrome(ctx, w, h, time, {
+    radius: 52,
+    outerPad: 2,
+    innerPad: 14,
+    leftButtons: 4,
+    rightButtons: 4,
+    topTabs: true,
+    bottomDock: true,
+  });
+
+  // Tiny status pills
+  drawUiPill(ctx, w * 0.10, h * 0.06, w * 0.22, 24, 'MAGICBLOCK', { active: true, align: 'left', font: '700 11px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.74, h * 0.06, w * 0.16, 24, 'SIG', { active: true, font: '700 11px Inter, sans-serif' });
+
+  const pad = 56;
+  const innerX = pad;
+  const innerY = pad + 12;
+  const innerW = w - pad * 2;
+  const innerH = h - pad * 2 - 18;
+
+  // Inner frame
+  const borderPulse = 0.6 + Math.sin(time * 4.0) * 0.16;
+  ctx.strokeStyle = `rgba(140,220,255,${(0.14 + borderPulse * 0.26).toFixed(3)})`;
+  ctx.lineWidth = 4;
+  roundRect(ctx, innerX, innerY, innerW, innerH, 46);
+  ctx.stroke();
+
+  roundRect(ctx, innerX, innerY, innerW, innerH, 46);
+  ctx.save();
+  ctx.clip();
+
+  // Subtle animated nebula sweep
+  const sweepX = ((time * 160) % (innerW + 260)) - 130;
+  const neb = ctx.createLinearGradient(innerX + sweepX - 120, innerY, innerX + sweepX + 120, innerY);
+  neb.addColorStop(0, 'rgba(255,255,255,0)');
+  neb.addColorStop(0.5, 'rgba(170,232,255,0.14)');
+  neb.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = neb;
+  ctx.fillRect(innerX, innerY, innerW, innerH);
+
+  // Logo
+  const img = state.logoImgEl;
+  if (img && state.logoImgLoaded) {
+    const floatX = Math.sin(time * 1.4) * 6;
+    const floatY = Math.cos(time * 1.7) * 5;
+
+    // Slight insets so it never touches the bezel
+    const contentX = innerX + innerW * 0.10;
+    const contentY = innerY + innerH * 0.12;
+    const contentW = innerW * 0.80;
+    const contentH = innerH * 0.76;
+
+    ctx.globalAlpha = 0.98;
+
+    // Outer glow behind logo
+    ctx.save();
+    const gx = contentX + contentW / 2;
+    const gy = contentY + contentH / 2;
+    const gr = Math.max(contentW, contentH) * 0.55;
+    const rg = ctx.createRadialGradient(gx, gy, 12, gx, gy, gr);
+    rg.addColorStop(0, 'rgba(111,228,255,0.20)');
+    rg.addColorStop(0.45, 'rgba(123,134,255,0.12)');
+    rg.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = rg;
+    ctx.fillRect(innerX, innerY, innerW, innerH);
+    ctx.restore();
+
+    // Draw logo (contain) with a tiny pulse
+    const pulse = 0.98 + Math.sin(time * 3.2) * 0.02;
+    const iw = Math.max(1, img.naturalWidth || img.width || 1);
+    const ih = Math.max(1, img.naturalHeight || img.height || 1);
+    const scale = Math.min(contentW / iw, contentH / ih) * pulse;
+    const dw = iw * scale;
+    const dh = ih * scale;
+    const dx = contentX + (contentW - dw) / 2 + floatX;
+    const dy = contentY + (contentH - dh) / 2 + floatY;
+
+    ctx.shadowColor = 'rgba(130,220,255,0.38)';
+    ctx.shadowBlur = 22;
+    ctx.drawImage(img, dx, dy, dw, dh);
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = 1;
+  } else {
+    const ph = ctx.createLinearGradient(innerX, innerY, innerX + innerW, innerY + innerH);
+    ph.addColorStop(0, 'rgba(28,38,56,0.95)');
+    ph.addColorStop(1, 'rgba(14,20,30,0.95)');
+    ctx.fillStyle = ph;
+    ctx.fillRect(innerX, innerY, innerW, innerH);
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = '700 30px Inter, sans-serif';
+    ctx.fillStyle = 'rgba(200,220,255,0.7)';
+    ctx.fillText('LOGO', w / 2, h / 2);
+  }
+
+  // Scanline sweep
+  const sweepY = ((time * 200) % (innerH + 160)) - 80;
+  const sg = ctx.createLinearGradient(0, innerY + sweepY - 44, 0, innerY + sweepY + 44);
+  sg.addColorStop(0, 'rgba(255,255,255,0)');
+  sg.addColorStop(0.5, 'rgba(170,232,255,0.12)');
+  sg.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = sg;
+  ctx.fillRect(innerX, innerY, innerW, innerH);
+
+  ctx.restore();
+
+  // Bottom docking controls
+  const dockY = h - 42;
+  drawUiPill(ctx, w * 0.10, dockY, w * 0.16, 22, 'INFO', { font: '700 10px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.28, dockY, w * 0.16, 22, 'EMIT', { active: true, font: '700 10px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.56, dockY, w * 0.14, 22, 'AUX', { font: '700 10px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.72, dockY, w * 0.18, 22, 'SYNC OK', { active: state.logoImgLoaded, font: '700 10px Inter, sans-serif' });
+}
 function renderDynamicScreens(force = false) {
-  const hasAny = state.screens.lid || state.screens.name || state.screens.avatar;
+  const hasAny = state.screens.lid || state.screens.name || state.screens.avatar || state.screens.logo;
   if (!hasAny) return;
 
   const now = performance.now() * 0.001;
@@ -1931,6 +2061,16 @@ function renderDynamicScreens(force = false) {
     }
     state.screens.avatar.material.emissiveIntensity = 0.55 + Math.sin(now * 3.1 + 0.8) * 0.05;
   }
+
+  if (state.screens.logo?.isMesh) {
+    const pack = ensureScreenFxPack('logo', 768, 768);
+    drawLogoScreenCanvas(pack.ctx, pack.width, pack.height, now);
+    pack.tex.needsUpdate = true;
+    if (!(state.screens.logo.material && state.screens.logo.material.map === pack.tex)) {
+      state.screens.logo.material = createScreenMaterial(pack.tex, 0x081427, 0.62);
+    }
+    state.screens.logo.material.emissiveIntensity = 0.56 + Math.sin(now * 3.4 + 1.2) * 0.05;
+  }
 }
 
 function prepareAvatarImageForScreens() {
@@ -1950,6 +2090,26 @@ function prepareAvatarImageForScreens() {
     state.avatarImgLoaded = false;
   };
   img.src = state.avatarDataUrl;
+
+
+function prepareLogoImageForScreens() {
+  // Loads assets/MagicBlock-Logomark-White.png once and caches it for the screen_logo canvas.
+  if (state.logoImgLoaded) return;
+
+  const img = new Image();
+  img.onload = () => {
+    // Trim transparent padding so the logo looks centered and "tight" inside the tablet.
+    const trimmed = trimTransparentImageToCanvas(img, 10);
+    state.logoImgEl = trimmed;
+    state.logoImgLoaded = true;
+    renderDynamicScreens(true);
+  };
+  img.onerror = () => {
+    state.logoImgEl = null;
+    state.logoImgLoaded = false;
+  };
+  img.src = 'assets/MagicBlock-Logomark-White.png';
+}
 }
 
 function makeEdgeGlowForMesh(mesh) {
@@ -2103,8 +2263,11 @@ function setupScreenPlaceholders() {
   if (state.screens.avatar?.isMesh) {
     state.screens.avatar.material = placeholderMaterial('AVATAR');
   }
+  if (state.screens.logo?.isMesh) {
+    state.screens.logo.material = placeholderMaterial('LOGO');
+  }
 
-  ['lid','name','avatar'].forEach((k) => {
+  ['lid','name','avatar','logo'].forEach((k) => {
     const m = state.screens[k]?.material;
     if (m?.map) applyTextureOrientation(m.map, k);
   });
@@ -2113,6 +2276,9 @@ function setupScreenPlaceholders() {
 function updateDynamicTextures() {
   if (state.avatarDataUrl && (!state.avatarImgEl || !state.avatarImgLoaded)) {
     prepareAvatarImageForScreens();
+  }
+  if (!state.logoImgEl || !state.logoImgLoaded) {
+    prepareLogoImageForScreens();
   }
   renderDynamicScreens(true);
 }
