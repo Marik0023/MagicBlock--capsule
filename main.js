@@ -1761,16 +1761,27 @@ function drawScreenGlassBg(ctx, w, h, opts = {}) {
     accentA = 'rgba(133,245,255,0.35)',
     accentB = 'rgba(123,134,255,0.20)',
     inner = 'rgba(8,12,18,0.86)',
+    inset = 6,
   } = opts;
 
+  const ix = Math.max(0, inset | 0);
+  const x0 = ix;
+  const y0 = ix;
+  const ww = Math.max(1, w - ix * 2);
+  const hh = Math.max(1, h - ix * 2);
+
   ctx.clearRect(0, 0, w, h);
+
+  // Base fill to avoid black/transparent edges when using rounded rects
+  ctx.fillStyle = inner;
+  ctx.fillRect(0, 0, w, h);
 
   const bg = ctx.createLinearGradient(0, 0, w, h);
   bg.addColorStop(0, inner);
   bg.addColorStop(0.55, 'rgba(12,18,26,0.92)');
   bg.addColorStop(1, 'rgba(9,13,20,0.9)');
   ctx.fillStyle = bg;
-  roundRect(ctx, 6, 6, w - 12, h - 12, radius);
+  roundRect(ctx, x0, y0, ww, hh, radius);
   ctx.fill();
 
   if (glow > 0) {
@@ -1779,28 +1790,36 @@ function drawScreenGlassBg(ctx, w, h, opts = {}) {
     rg.addColorStop(0.45, accentB);
     rg.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.globalAlpha = glow;
-    roundRect(ctx, 6, 6, w - 12, h - 12, radius);
+    roundRect(ctx, x0, y0, ww, hh, radius);
     ctx.fillStyle = rg;
     ctx.fill();
     ctx.globalAlpha = 1;
   }
 
-  ctx.strokeStyle = 'rgba(255,255,255,0.12)';
-  ctx.lineWidth = border;
-  roundRect(ctx, 6, 6, w - 12, h - 12, radius);
-  ctx.stroke();
+  if (border > 0) {
+    ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+    ctx.lineWidth = border;
+    roundRect(ctx, x0, y0, ww, hh, radius);
+    ctx.stroke();
+  }
+
+  // Subtle glass shine (optional)
+  const clipInset = ix + 2;
+  const cx = clipInset;
+  const cy = clipInset;
+  const cw = Math.max(1, w - clipInset * 2);
+  const ch = Math.max(1, h - clipInset * 2);
 
   ctx.save();
-  roundRect(ctx, 8, 8, w - 16, h - 16, radius - 2);
+  roundRect(ctx, cx, cy, cw, ch, Math.max(0, radius - 2));
   ctx.clip();
   const shine = ctx.createLinearGradient(0, 0, 0, h * 0.48);
-  shine.addColorStop(0, 'rgba(255,255,255,0.22)');
+  shine.addColorStop(0, 'rgba(255,255,255,0.16)');
   shine.addColorStop(1, 'rgba(255,255,255,0)');
   ctx.fillStyle = shine;
   ctx.fillRect(0, 0, w, h * 0.5);
   ctx.restore();
 }
-
 
 function drawTabletBezelChrome(ctx, w, h, time = 0, opts = {}) {
   const {
@@ -2047,35 +2066,22 @@ function drawLockGlyph(ctx, x, y, size, progressClosed) {
 }
 
 function drawLidScreenCanvas(ctx, w, h, time) {
+  // Clean screen: no extra bezel/borders/buttons (hardware frame is already in the 3D model)
   drawScreenGlassBg(ctx, w, h, {
-    radius: 44,
-    border: 4,
-    glow: 0.26,
-    accentA: 'rgba(111,228,255,0.48)',
-    accentB: 'rgba(123,134,255,0.28)',
-    inner: 'rgba(7,11,17,0.92)',
+    radius: 0,
+    border: 0,
+    glow: 0.16,
+    inset: 0,
+    accentA: 'rgba(111,228,255,0.40)',
+    accentB: 'rgba(123,134,255,0.22)',
+    inner: 'rgba(7,11,17,0.96)',
   });
-
-  drawTabletBezelChrome(ctx, w, h, time, {
-    radius: 44,
-    outerPad: 2,
-    innerPad: 12,
-    leftButtons: 4,
-    rightButtons: 3,
-    topTabs: true,
-    bottomDock: true,
-  });
-
-  // Header pills
-  drawUiPill(ctx, w * 0.08, h * 0.10, w * 0.14, 28, 'SYS', { active: true, align: 'center' });
-  drawUiPill(ctx, w * 0.43, h * 0.10, w * 0.14, 28, 'LOCK', { active: state.sealed || state.sealAnimPlaying, align: 'center' });
-  drawUiPill(ctx, w * 0.78, h * 0.10, w * 0.10, 28, 'TX', { active: true, align: 'center' });
 
   const closeP = 1 - clamp01(state.lidAnimT);
   const sealP = state.sealAnimPlaying ? easeOutCubic(closeP) : (state.sealed ? 1 : 0);
 
-  // Main lock glyph centered
-  drawLockGlyph(ctx, w * 0.5, h * 0.46, h * 0.62, sealP);
+  // Main lock glyph
+  drawLockGlyph(ctx, w * 0.5, h * 0.46, h * 0.68, sealP);
 
   const status = state.sealed ? 'SEALED' : (state.sealAnimPlaying ? 'LOCKING…' : 'READY');
   ctx.textAlign = 'center';
@@ -2090,22 +2096,22 @@ function drawLidScreenCanvas(ctx, w, h, time) {
     titleGrad.addColorStop(1, '#83ffd0');
   }
 
-  ctx.shadowColor = 'rgba(118,220,255,0.35)';
+  ctx.shadowColor = 'rgba(118,220,255,0.30)';
   ctx.shadowBlur = 16;
   ctx.fillStyle = titleGrad;
   ctx.font = '800 64px Inter, sans-serif';
-  ctx.fillText(status, w / 2, h * 0.68);
+  ctx.fillText(status, w / 2, h * 0.70);
 
   ctx.shadowBlur = 0;
-  ctx.fillStyle = 'rgba(211,233,255,0.70)';
+  ctx.fillStyle = 'rgba(211,233,255,0.66)';
   ctx.font = '600 22px Inter, sans-serif';
-  ctx.fillText('TGE CAPSULE SECURITY', w / 2, h * 0.80);
+  ctx.fillText('TGE CAPSULE SECURITY', w / 2, h * 0.82);
 
   // Centered progress bar
   const barW = w * 0.56;
   const barH = 26;
   const barX = (w - barW) / 2;
-  const barY = h * 0.86;
+  const barY = h * 0.87;
 
   ctx.fillStyle = 'rgba(255,255,255,0.06)';
   roundRect(ctx, barX, barY, barW, barH, 13);
@@ -2126,126 +2132,85 @@ function drawLidScreenCanvas(ctx, w, h, time) {
   ctx.clip();
   const sweep = ctx.createLinearGradient(barX + sweepX - 50, barY, barX + sweepX + 50, barY);
   sweep.addColorStop(0, 'rgba(255,255,255,0)');
-  sweep.addColorStop(0.5, 'rgba(255,255,255,0.36)');
+  sweep.addColorStop(0.5, 'rgba(255,255,255,0.32)');
   sweep.addColorStop(1, 'rgba(255,255,255,0)');
   ctx.fillStyle = sweep;
   ctx.fillRect(barX, barY, barW, barH);
   ctx.restore();
 }
 
+
 function drawNameScreenCanvas(ctx, w, h, time) {
   const nick = (state.nickname || 'PLAYER').slice(0, 24);
 
+  // Clean screen: no extra bezel/borders/buttons
   drawScreenGlassBg(ctx, w, h, {
-    radius: 36,
-    border: 3,
-    glow: 0.16,
-    accentA: 'rgba(130,220,255,0.3)',
-    accentB: 'rgba(123,134,255,0.2)',
-    inner: 'rgba(10,14,22,0.92)',
-  });
-
-  drawTabletBezelChrome(ctx, w, h, time, {
-    radius: 36,
-    outerPad: 2,
-    innerPad: 12,
-    leftButtons: 3,
-    rightButtons: 4,
-    topTabs: true,
-    bottomDock: true,
+    radius: 0,
+    border: 0,
+    glow: 0.12,
+    inset: 0,
+    accentA: 'rgba(130,220,255,0.22)',
+    accentB: 'rgba(123,134,255,0.16)',
+    inner: 'rgba(10,14,22,0.96)',
   });
 
   // Subtle scan lines
   ctx.save();
-  roundRect(ctx, 10, 10, w - 20, h - 20, 30);
-  ctx.clip();
-  for (let i = 0; i < 10; i++) {
-    const yy = ((time * 50 + i * 36) % (h + 90)) - 45;
-    const g = ctx.createLinearGradient(0, yy, 0, yy + 22);
+  ctx.globalAlpha = 0.55;
+  for (let i = 0; i < 9; i++) {
+    const yy = ((time * 46 + i * 34) % (h + 90)) - 45;
+    const g = ctx.createLinearGradient(0, yy, 0, yy + 20);
     g.addColorStop(0, 'rgba(0,0,0,0)');
-    g.addColorStop(0.5, 'rgba(120,210,255,0.10)');
+    g.addColorStop(0.5, 'rgba(120,210,255,0.08)');
     g.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.fillStyle = g;
-    ctx.fillRect(0, yy, w, 22);
+    ctx.fillRect(0, yy, w, 20);
   }
   ctx.restore();
-
-  // Header
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.font = '600 18px Inter, sans-serif';
-  ctx.fillStyle = 'rgba(197,221,255,0.56)';
-  ctx.fillText('IDENTITY LINKED', w / 2, h * 0.20);
 
   // Centered nickname (auto-size)
   let size = 92;
   if (nick.length > 14) size = 72;
   if (nick.length > 18) size = 58;
 
-  const pulse = 0.96 + Math.sin(time * 3.6) * 0.03;
+  const pulse = 0.98 + Math.sin(time * 3.4) * 0.02;
   const nameGrad = ctx.createLinearGradient(0, 0, w, 0);
   nameGrad.addColorStop(0, '#e8f8ff');
   nameGrad.addColorStop(0.45, '#b8eeff');
   nameGrad.addColorStop(1, '#9aaeff');
 
-  ctx.shadowColor = 'rgba(118,220,255,0.35)';
-  ctx.shadowBlur = 18;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.shadowColor = 'rgba(118,220,255,0.28)';
+  ctx.shadowBlur = 16;
   ctx.fillStyle = nameGrad;
   ctx.font = `800 ${Math.round(size * pulse)}px Inter, sans-serif`;
   ctx.fillText(nick, w / 2, h / 2);
 
   ctx.shadowBlur = 0;
-
-  // Bottom pills (kept, but symmetric)
-  const y = h * 0.80;
-  const pillW = w * 0.14;
-  drawUiPill(ctx, w * 0.18 - pillW / 2, y, pillW, 24, 'SCAN', { active: true, font: '700 11px Inter, sans-serif' });
-  drawUiPill(ctx, w * 0.38 - pillW / 2, y, pillW, 24, 'SYNC', { font: '700 11px Inter, sans-serif' });
-  drawUiPill(ctx, w * 0.62 - pillW / 2, y, pillW, 24, 'NODE', { font: '700 11px Inter, sans-serif' });
-  drawUiPill(ctx, w * 0.82 - pillW / 2, y, pillW, 24, 'OK', { active: true, font: '700 11px Inter, sans-serif' });
 }
 
+
 function drawAvatarScreenCanvas(ctx, w, h, time) {
+  // Clean screen: no extra bezel/borders/buttons
   drawScreenGlassBg(ctx, w, h, {
-    radius: 56,
-    border: 3,
-    glow: 0.2,
-    accentA: 'rgba(111,228,255,0.26)',
-    accentB: 'rgba(123,134,255,0.18)',
-    inner: 'rgba(10,14,22,0.94)',
+    radius: 0,
+    border: 0,
+    glow: 0.12,
+    inset: 0,
+    accentA: 'rgba(111,228,255,0.18)',
+    accentB: 'rgba(123,134,255,0.12)',
+    inner: 'rgba(10,14,22,0.96)',
   });
 
-  drawTabletBezelChrome(ctx, w, h, time, {
-    radius: 56,
-    outerPad: 2,
-    innerPad: 14,
-    leftButtons: 5,
-    rightButtons: 5,
-    topTabs: true,
-    bottomDock: true,
-  });
+  const innerX = 0;
+  const innerY = 0;
+  const innerW = w;
+  const innerH = h;
 
-  // Top controls
-  drawUiPill(ctx, w * 0.08, h * 0.05, w * 0.18, 24, 'VISOR', { active: true, align: 'left', font: '700 11px Inter, sans-serif' });
-  drawUiPill(ctx, w * 0.28, h * 0.05, w * 0.14, 24, 'CAM', { font: '700 11px Inter, sans-serif' });
-  drawUiPill(ctx, w * 0.72, h * 0.05, w * 0.08, 24, 'A', { active: true, font: '700 11px Inter, sans-serif' });
-  drawUiPill(ctx, w * 0.82, h * 0.05, w * 0.10, 24, 'REC', { active: !!state.avatarImgLoaded, font: '700 11px Inter, sans-serif' });
-
-  // Inner screen area
-  const pad = 56;
-  const innerX = pad;
-  const innerY = pad;
-  const innerW = w - pad * 2;
-  const innerH = h - pad * 2;
-
-  const borderPulse = 0.65 + Math.sin(time * 4.5) * 0.18;
-  ctx.strokeStyle = `rgba(140,220,255,${(0.16 + borderPulse * 0.28).toFixed(3)})`;
-  ctx.lineWidth = 4;
-  roundRect(ctx, innerX, innerY, innerW, innerH, 44);
-  ctx.stroke();
-
-  roundRect(ctx, innerX, innerY, innerW, innerH, 44);
   ctx.save();
+  ctx.beginPath();
+  ctx.rect(innerX, innerY, innerW, innerH);
   ctx.clip();
 
   const img = state.avatarImgEl;
@@ -2293,41 +2258,18 @@ function drawAvatarScreenCanvas(ctx, w, h, time) {
     ctx.fillText('AVATAR', w / 2, h / 2);
   }
 
-  // Sweep line
+  // Sweep line (subtle)
   const sweepY = ((time * 180) % (innerH + 160)) - 80;
   const sg = ctx.createLinearGradient(0, innerY + sweepY - 40, 0, innerY + sweepY + 40);
   sg.addColorStop(0, 'rgba(255,255,255,0)');
-  sg.addColorStop(0.5, 'rgba(170,232,255,0.16)');
+  sg.addColorStop(0.5, 'rgba(170,232,255,0.12)');
   sg.addColorStop(1, 'rgba(255,255,255,0)');
   ctx.fillStyle = sg;
   ctx.fillRect(innerX, innerY, innerW, innerH);
+
   ctx.restore();
-
-  // Corner accents
-  ctx.strokeStyle = 'rgba(165,236,255,0.55)';
-  ctx.lineWidth = 5;
-  const c = 26;
-  const corners = [
-    [innerX + 10, innerY + 10, 1, 1],
-    [innerX + innerW - 10, innerY + 10, -1, 1],
-    [innerX + 10, innerY + innerH - 10, 1, -1],
-    [innerX + innerW - 10, innerY + innerH - 10, -1, -1],
-  ];
-  for (const [cx, cy, sx, sy] of corners) {
-    ctx.beginPath();
-    ctx.moveTo(cx, cy + sy * c);
-    ctx.lineTo(cx, cy);
-    ctx.lineTo(cx + sx * c, cy);
-    ctx.stroke();
-  }
-
-  // Bottom dock
-  const dockY = h - 42;
-  drawUiPill(ctx, w * 0.10, dockY, w * 0.16, 22, 'GRID', { font: '700 10px Inter, sans-serif' });
-  drawUiPill(ctx, w * 0.28, dockY, w * 0.16, 22, 'ZOOM', { active: true, font: '700 10px Inter, sans-serif' });
-  drawUiPill(ctx, w * 0.56, dockY, w * 0.14, 22, 'HDR', { font: '700 10px Inter, sans-serif' });
-  drawUiPill(ctx, w * 0.72, dockY, w * 0.18, 22, 'SYNC OK', { active: state.avatarImgLoaded, font: '700 10px Inter, sans-serif' });
 }
+
 
 function renderDynamicScreens(force = false) {
   const hasAny = state.screens.lid || state.screens.name || state.screens.avatar;
