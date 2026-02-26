@@ -56,6 +56,13 @@ const state = {
   lidHinge: null,
   lidBoneOpenQuat: null,
   lidAnimUsesHingeFallback: false,
+
+  screens: {
+    lid: null,
+    name: null,
+    avatar: null,
+  },
+
   lidClosedQuat: null,
   lidOpenQuat: null,
   lidAnimT: 0, // 0=closed, 1=open
@@ -69,6 +76,17 @@ const state = {
   // one-way spin during seal (avoid back-and-forth wobble)
   sealSpinTargetDelta: 0,
   sealSpinCommitted: false,
+
+  // dynamic screen canvases / effects
+  screenFx: {
+    lid: null,
+    name: null,
+    avatar: null,
+  },
+  avatarImgEl: null,
+  avatarImgLoaded: false,
+  lastScreenFxDraw: 0,
+
   // message letter prop (flies into capsule during sealing)
   letterProp: null,
   letterPropVisual: null,
@@ -173,6 +191,7 @@ function applyPersistedCapsuleState(saved) {
 
   if (saved.avatarDataUrl) {
     state.avatarDataUrl = saved.avatarDataUrl;
+    prepareAvatarImageForScreens();
 
     ui.avatarPreview.innerHTML = '';
     const img = document.createElement('img');
@@ -222,6 +241,7 @@ function applyPersistedCapsuleState(saved) {
   }
 
   updateSealButtonState();
+  updateDynamicTextures();
 }
 
 // ---------- Three.js scene ----------
@@ -1030,6 +1050,11 @@ loader.load(
     if (state.capsuleBase) state.capsuleGroup.add(state.capsuleBase.clone(false));
     if (state.capsuleLid) state.capsuleGroup.add(state.capsuleLid.clone(false));
 
+    // Screens
+    state.screens.lid = gltf.scene.getObjectByName('screen_lid');
+    state.screens.name = gltf.scene.getObjectByName('screen_name');
+    state.screens.avatar = gltf.scene.getObjectByName('screen_avatar');
+
     // Lid pose setup
     if (state.lidBone || state.lidControl) {
       const boneNode = state.lidBone || state.lidControl;
@@ -1198,6 +1223,10 @@ loader.load(
 
     // Optional 3D letter/envelope prop for the seal cinematic
     loadLetterPropModel();
+
+    setupScreenPlaceholders();
+    updateDynamicTextures();
+
     updateSealButtonState();
     resize();
   },
@@ -1227,6 +1256,1273 @@ function easeInOutCubic(t) {
 function easeOutCubic(t) {
   const x = clamp01(t);
   return 1 - Math.pow(1 - x, 3);
+}
+
+function applyTextureOrientation(tex, kind = 'default') {
+  if (!tex) return tex;
+
+  // IMPORTANT: canvases applied to GLTF meshes must use flipY=false (same as glTF textures),
+  // otherwise text/icons appear upside-down on screen_* meshes.
+  tex.flipY = false;
+
+  tex.center.set(0.5, 0.5);
+  tex.rotation = -Math.PI / 2; // GLB screens in this model are UV-rotated 90deg
+  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.repeat.set(1, 1);
+  tex.offset.set(0, 0);
+
+  // Lid screen UV in this GLB is mirrored relative to side screens.
+  // IMPORTANT: negative repeat requires RepeatWrapping (with Clamp it can sample edge color -> blank screen on some GPUs).
+  if (kind === 'lid') {
+    // Lid screen UV is opposite to the side screens in this GLB.
+    // Use +90deg (instead of the shared -90deg) + Y mirror to keep the lid display upright.
+    tex.rotation = Math.PI / 2;
+    tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.y = -1;
+    tex.offset.y = 1;
+  }
+
+  tex.needsUpdate = true;
+  return tex;
+}
+
+
+
+// ---------- Screen UV auto-calibration (no more manual centering) ----------
+// Some exports can have screen_* UVs that cover only part of the texture (or are rotated/mirrored).
+// We compute an affine UV->(screen space) transform per screen mesh and apply it to the CanvasTexture,
+// so the whole canvas always fits the whole physical screen and stays upright.
+
+function projectOntoPlane(v, n) {
+  // v - (v·n) n
+  const d = v.dot(n);
+  return v.clone().addScaledVector(n, -d);
+}
+
+function solve3x3(A, b) {
+  // Gaussian elimination for a 3x3 system
+  const m = [
+    [A[0][0], A[0][1], A[0][2], b[0]],
+    [A[1][0], A[1][1], A[1][2], b[1]],
+    [A[2][0], A[2][1], A[2][2], b[2]],
+  ];
+
+  for (let col = 0; col < 3; col++) {
+    // pivot
+    let pivot = col;
+    for (let r = col + 1; r < 3; r++) {
+      if (Math.abs(m[r][col]) > Math.abs(m[pivot][col])) pivot = r;
+    }
+    if (Math.abs(m[pivot][col]) < 1e-10) return null;
+    if (pivot !== col) {
+      const tmp = m[col]; m[col] = m[pivot]; m[pivot] = tmp;
+    }
+
+    // normalize row
+    const div = m[col][col];
+    for (let c = col; c < 4; c++) m[col][c] /= div;
+
+    // eliminate
+    for (let r = 0; r < 3; r++) {
+      if (r === col) continue;
+      const f = m[r][col];
+      for (let c = col; c < 4; c++) m[r][c] -= f * m[col][c];
+    }
+  }
+
+  return [m[0][3], m[1][3], m[2][3]];
+}
+
+function computeScreenUvCalibration(mesh) {
+  if (!mesh?.isMesh || !mesh.geometry?.attributes?.uv || !mesh.geometry.attributes.position) return null;
+
+  const geo = mesh.geometry;
+  const pos = geo.attributes.position.array;
+  const uv = geo.attributes.uv.array;
+  const count = Math.min(geo.attributes.position.count, geo.attributes.uv.count);
+
+  // Sample step to keep it fast
+  const maxSamples = 1200;
+  const step = Math.max(1, Math.floor(count / maxSamples));
+
+  // Try to get a valid normal from 3 non-collinear points
+  const p0 = new THREE.Vector3();
+  const p1 = new THREE.Vector3();
+  const p2 = new THREE.Vector3();
+  const normalLocal = new THREE.Vector3();
+  let okNormal = false;
+
+  for (let i = 0; i < count - 2; i += step) {
+    const i0 = i;
+    const i1 = Math.min(count - 1, i + step);
+    const i2 = Math.min(count - 1, i + step * 2);
+
+    p0.set(pos[i0 * 3], pos[i0 * 3 + 1], pos[i0 * 3 + 2]);
+    p1.set(pos[i1 * 3], pos[i1 * 3 + 1], pos[i1 * 3 + 2]);
+    p2.set(pos[i2 * 3], pos[i2 * 3 + 1], pos[i2 * 3 + 2]);
+
+    const v1 = p1.clone().sub(p0);
+    const v2 = p2.clone().sub(p0);
+    normalLocal.copy(v1.cross(v2));
+    if (normalLocal.lengthSq() > 1e-10) { okNormal = true; break; }
+  }
+
+  if (!okNormal) return null;
+
+  normalLocal.normalize();
+  const normalWorld = normalLocal.clone().applyMatrix3(new THREE.Matrix3().getNormalMatrix(mesh.matrixWorld)).normalize();
+
+  const worldUp = new THREE.Vector3(0, 1, 0);
+  const worldForward = new THREE.Vector3(0, 0, 1);
+
+  const meshWorldQuat = new THREE.Quaternion();
+  mesh.getWorldQuaternion(meshWorldQuat);
+  const localUpWorld = new THREE.Vector3(0, 1, 0).applyQuaternion(meshWorldQuat);
+  const localRightWorld = new THREE.Vector3(1, 0, 0).applyQuaternion(meshWorldQuat);
+
+  const meshCenter = new THREE.Vector3();
+  new THREE.Box3().setFromObject(mesh).getCenter(meshCenter);
+
+  const camAway = new THREE.Vector3().subVectors(meshCenter, camera.position); // away from camera
+
+  const candidates = [
+    projectOntoPlane(worldUp, normalWorld),
+    projectOntoPlane(localUpWorld, normalWorld),
+    projectOntoPlane(camAway, normalWorld),
+    projectOntoPlane(worldForward, normalWorld),
+  ];
+
+  let upDir = null;
+  for (const c of candidates) {
+    if (c.lengthSq() > 1e-8) { upDir = c.normalize(); break; }
+  }
+  if (!upDir) return null;
+
+  // right = up x normal (in plane)
+  let rightDir = upDir.clone().cross(normalWorld);
+  if (rightDir.lengthSq() < 1e-10) rightDir = normalWorld.clone().cross(upDir);
+  rightDir.normalize();
+
+  // Align "right" with the mesh local right as much as possible (stabilizes mirrored exports)
+  if (rightDir.dot(localRightWorld) < 0) rightDir.multiplyScalar(-1);
+
+  const downDir = upDir.clone().multiplyScalar(-1);
+
+  // First pass: min/max in right/down coordinates
+  let minW = Infinity, maxW = -Infinity, minH = Infinity, maxH = -Infinity;
+  const tmpWorld = new THREE.Vector3();
+  for (let i = 0; i < count; i += step) {
+    tmpWorld.set(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]).applyMatrix4(mesh.matrixWorld);
+    const wCoord = tmpWorld.dot(rightDir);
+    const hCoord = tmpWorld.dot(downDir);
+    if (wCoord < minW) minW = wCoord;
+    if (wCoord > maxW) maxW = wCoord;
+    if (hCoord < minH) minH = hCoord;
+    if (hCoord > maxH) maxH = hCoord;
+  }
+
+  const rangeW = maxW - minW;
+  const rangeH = maxH - minH;
+  if (rangeW < 1e-8 || rangeH < 1e-8) return null;
+
+  // Second pass: least squares for u and v as affine functions of (w,h,1)
+  let Sww = 0, Shh = 0, Swh = 0, Sw = 0, Sh = 0, N = 0;
+  let Suw = 0, Suh = 0, Su = 0;
+  let Svw = 0, Svh = 0, Sv = 0;
+
+  for (let i = 0; i < count; i += step) {
+    tmpWorld.set(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]).applyMatrix4(mesh.matrixWorld);
+
+    const w = (tmpWorld.dot(rightDir) - minW) / rangeW;
+    const h = (tmpWorld.dot(downDir) - minH) / rangeH;
+
+    const u = uv[i * 2];
+    const v = uv[i * 2 + 1];
+
+    Sww += w * w;
+    Shh += h * h;
+    Swh += w * h;
+    Sw += w;
+    Sh += h;
+    N += 1;
+
+    Suw += w * u;
+    Suh += h * u;
+    Su += u;
+
+    Svw += w * v;
+    Svh += h * v;
+    Sv += v;
+  }
+
+  const A = [
+    [Sww, Swh, Sw],
+    [Swh, Shh, Sh],
+    [Sw,  Sh,  N],
+  ];
+
+  const coefU = solve3x3(A, [Suw, Suh, Su]); // u = p*w + q*h + r
+  const coefV = solve3x3(A, [Svw, Svh, Sv]); // v = s*w + t*h + u0
+
+  // Fallback: UV bounds normalization only
+  const boundsFallback = () => {
+    let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
+    for (let i = 0; i < count; i += step) {
+      const uu = uv[i * 2], vv = uv[i * 2 + 1];
+      if (uu < minU) minU = uu;
+      if (uu > maxU) maxU = uu;
+      if (vv < minV) minV = vv;
+      if (vv > maxV) maxV = vv;
+    }
+    const du = (maxU - minU) || 1;
+    const dv = (maxV - minV) || 1;
+    const mat = new THREE.Matrix3();
+    mat.set(
+      1 / du, 0, -minU / du,
+      0, 1 / dv, -minV / dv,
+      0, 0, 1
+    );
+    return mat;
+  };
+
+  if (!coefU || !coefV) return boundsFallback();
+
+  const p = coefU[0], q = coefU[1], r = coefU[2];
+  const s = coefV[0], t = coefV[1], u0 = coefV[2];
+
+  const det = p * t - q * s;
+  if (Math.abs(det) < 1e-10) return boundsFallback();
+
+  const inv11 = t / det;
+  const inv12 = -q / det;
+  const inv21 = -s / det;
+  const inv22 = p / det;
+
+  const c1 = -(inv11 * r + inv12 * u0);
+  const c2 = -(inv21 * r + inv22 * u0);
+
+  const mat = new THREE.Matrix3();
+  mat.set(
+    inv11, inv12, c1,
+    inv21, inv22, c2,
+    0,    0,    1
+  );
+  return mat;
+}
+
+
+function computeFrontGlassUvBounds(mesh) {
+  // Many GLB exports merge the screen glass, frame and side walls into one mesh.
+  // If we normalize by the *global* UV bounds, the actual front glass gets only a sub-rectangle of the canvas (cropped UI).
+  // Here we detect the dominant front-facing plane by face normals and compute UV bounds only for that plane.
+  const geo = mesh?.geometry;
+  const posAttr = geo?.attributes?.position;
+  const uvAttr = geo?.attributes?.uv;
+  if (!geo || !posAttr || !uvAttr) return null;
+
+  const pos = posAttr.array;
+  const uv = uvAttr.array;
+  const idx = geo.index ? geo.index.array : null;
+  const triCount = idx ? Math.floor(idx.length / 3) : Math.floor(posAttr.count / 3);
+  if (triCount < 1) return null;
+
+  // Cache per-geometry to avoid repeated work
+  const cacheKey = '__frontGlassUvBounds';
+  if (mesh.userData?.[cacheKey]) return mesh.userData[cacheKey];
+
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
+  const n = new THREE.Vector3();
+  const seed = new THREE.Vector3(0, 0, 1);
+
+  let bestArea2 = -1;
+
+  const getVid = (t, k) => idx ? idx[t * 3 + k] : (t * 3 + k);
+
+  // Pass 1: pick a seed normal from the largest-area triangle
+  for (let t = 0; t < triCount; t++) {
+    const ia = getVid(t, 0), ib = getVid(t, 1), ic = getVid(t, 2);
+    a.set(pos[ia * 3], pos[ia * 3 + 1], pos[ia * 3 + 2]);
+    b.set(pos[ib * 3], pos[ib * 3 + 1], pos[ib * 3 + 2]);
+    c.set(pos[ic * 3], pos[ic * 3 + 1], pos[ic * 3 + 2]);
+
+    n.copy(b).sub(a).cross(c.clone().sub(a));
+    const area2 = n.length(); // proportional to area (2x)
+    if (area2 > bestArea2 && area2 > 1e-12) {
+      bestArea2 = area2;
+      seed.copy(n).normalize();
+    }
+  }
+
+  if (bestArea2 < 1e-12) return null;
+
+  // Pass 2: compute dominant plane normal (area-weighted, hemisphere-aligned)
+  const avg = new THREE.Vector3(0, 0, 0);
+  for (let t = 0; t < triCount; t++) {
+    const ia = getVid(t, 0), ib = getVid(t, 1), ic = getVid(t, 2);
+    a.set(pos[ia * 3], pos[ia * 3 + 1], pos[ia * 3 + 2]);
+    b.set(pos[ib * 3], pos[ib * 3 + 1], pos[ib * 3 + 2]);
+    c.set(pos[ic * 3], pos[ic * 3 + 1], pos[ic * 3 + 2]);
+
+    n.copy(b).sub(a).cross(c.clone().sub(a));
+    const area2 = n.length();
+    if (area2 < 1e-12) continue;
+
+    n.normalize();
+    if (n.dot(seed) < 0) n.multiplyScalar(-1);
+    avg.addScaledVector(n, area2);
+  }
+
+  if (avg.lengthSq() < 1e-12) return null;
+  avg.normalize();
+
+  const cos15 = Math.cos(THREE.MathUtils.degToRad(15));
+  const cos25 = Math.cos(THREE.MathUtils.degToRad(25));
+
+  let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
+  let selected = 0;
+
+  const accumulate = (t, cosThresh) => {
+    const ia = getVid(t, 0), ib = getVid(t, 1), ic = getVid(t, 2);
+    a.set(pos[ia * 3], pos[ia * 3 + 1], pos[ia * 3 + 2]);
+    b.set(pos[ib * 3], pos[ib * 3 + 1], pos[ib * 3 + 2]);
+    c.set(pos[ic * 3], pos[ic * 3 + 1], pos[ic * 3 + 2]);
+
+    n.copy(b).sub(a).cross(c.clone().sub(a));
+    const area2 = n.length();
+    if (area2 < 1e-12) return false;
+
+    n.normalize();
+    if (n.dot(seed) < 0) n.multiplyScalar(-1);
+    const cos = n.dot(avg);
+    if (cos < cosThresh) return false;
+
+    // include UVs for this face
+    const vids = [ia, ib, ic];
+    for (let j = 0; j < 3; j++) {
+      const vId = vids[j];
+      const u = uv[vId * 2];
+      const v = uv[vId * 2 + 1];
+      if (u < minU) minU = u;
+      if (u > maxU) maxU = u;
+      if (v < minV) minV = v;
+      if (v > maxV) maxV = v;
+    }
+    selected++;
+    return true;
+  };
+
+  // Try with 15°, fallback to 25° if too few faces selected.
+  for (let t = 0; t < triCount; t++) accumulate(t, cos15);
+  if (selected < Math.max(6, triCount * 0.05)) {
+    minU = Infinity; maxU = -Infinity; minV = Infinity; maxV = -Infinity;
+    selected = 0;
+    for (let t = 0; t < triCount; t++) accumulate(t, cos25);
+  }
+
+  if (!isFinite(minU) || !isFinite(minV) || (maxU - minU) < 1e-8 || (maxV - minV) < 1e-8) return null;
+
+  const result = { minU, maxU, minV, maxV };
+  mesh.userData[cacheKey] = result;
+  return result;
+}
+
+function calibrateScreenTextureForMesh(mesh, tex, kind = 'side') {
+  if (!mesh?.isMesh || !tex) return;
+  const geo = mesh.geometry;
+  const uva = geo?.attributes?.uv?.array;
+  const uvCount = geo?.attributes?.uv?.count || 0;
+  if (!uva || uvCount < 3) return;
+
+  const cacheKey = `__screenTexMatrix_${kind}`;
+  if (!mesh.userData[cacheKey]) {
+    // 1) UV bounds normalization: map the *front glass* UV region -> [0..1]
+// (the mesh can include frame/sides/backfaces; using global UV bounds crops the UI)
+const fb = computeFrontGlassUvBounds(mesh);
+let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
+
+if (fb) {
+  ({ minU, maxU, minV, maxV } = fb);
+} else {
+  for (let i = 0; i < uvCount; i++) {
+    const u = uva[i * 2];
+    const v = uva[i * 2 + 1];
+    if (u < minU) minU = u;
+    if (u > maxU) maxU = u;
+    if (v < minV) minV = v;
+    if (v > maxV) maxV = v;
+  }
+}
+
+const du = (maxU - minU) || 1;
+const dv = (maxV - minV) || 1;
+
+    const bounds = new THREE.Matrix3();
+    bounds.set(
+      1 / du, 0, -minU / du,
+      0, 1 / dv, -minV / dv,
+      0, 0, 1
+    );
+
+    // 2) Orientation fix (this GLB has rotated screens; lid also mirrored).
+    const T = (tx, ty) => {
+      const m = new THREE.Matrix3();
+      m.set(1, 0, tx, 0, 1, ty, 0, 0, 1);
+      return m;
+    };
+    const R = (rad) => {
+      const c = Math.cos(rad);
+      const s = Math.sin(rad);
+      const m = new THREE.Matrix3();
+      m.set(c, -s, 0, s, c, 0, 0, 0, 1);
+      return m;
+    };
+    const rotAround = (rad, cx = 0.5, cy = 0.5) => T(cx, cy).multiply(R(rad)).multiply(T(-cx, -cy));
+
+    let orient;
+    if (kind === 'lid') {
+      // Lid: +90° and flip Y to keep text upright on this export
+      const flipY = new THREE.Matrix3();
+      flipY.set(1, 0, 0, 0, -1, 1, 0, 0, 1);
+      orient = flipY.multiply(rotAround(Math.PI / 2));
+    } else {
+      // Side screens: -90° (standard for this export)
+      orient = rotAround(-Math.PI / 2);
+    }
+
+    // Final: orient * bounds (and optional per-screen flips)
+    const base = new THREE.Matrix3();
+    base.copy(orient).multiply(bounds);
+
+    // For this model, screen_name and screen_avatar appear mirrored/upside-down.
+    // Apply a 180° UV flip: (u,v) -> (1-u, 1-v). This stays inside [0..1] so ClampToEdge is safe.
+    if (kind === 'name' || kind === 'avatar') {
+      const flipXY = new THREE.Matrix3();
+      flipXY.set(-1, 0, 1, 0, -1, 1, 0, 0, 1);
+      const out = new THREE.Matrix3();
+      out.multiplyMatrices(flipXY, base); // out = flipXY * base
+      mesh.userData[cacheKey] = out;
+    } else {
+      mesh.userData[cacheKey] = base;
+    }
+  }
+
+  tex.flipY = false;
+  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.matrixAutoUpdate = false;
+  tex.matrix.copy(mesh.userData[cacheKey]);
+  tex.needsUpdate = true;
+}
+
+
+function makeCanvasPack(width, height, painter) {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy?.() || 1);
+
+  if (typeof painter === 'function') painter(ctx, width, height, 0);
+
+  tex.needsUpdate = true;
+  return { canvas, ctx, tex, width, height };
+}
+
+function createScreenMaterial(tex, emissiveHex = 0xffffff, emissiveIntensity = 1.0) {
+  // IMPORTANT: If we use only `map`, the screen UI gets multiplied by scene lighting and can look black.
+  // Use emissiveMap so the UI is self-lit, while keeping a subtle physical "glass" feel.
+  const mat = new THREE.MeshPhysicalMaterial({
+    color: new THREE.Color(0x0b0f18),
+    map: null,
+    transparent: true,
+    opacity: 1,
+    metalness: 0.02,
+    roughness: 0.38,
+    clearcoat: 0.85,
+    clearcoatRoughness: 0.22,
+    emissive: new THREE.Color(emissiveHex),
+    emissiveMap: tex,
+    emissiveIntensity,
+  });
+  mat.toneMapped = false;
+  return mat;
+}
+
+function ensureScreenFxPack(key, width, height) {
+  if (state.screenFx[key]) return state.screenFx[key];
+  const pack = makeCanvasPack(width, height);
+
+  // Screen textures are calibrated per-mesh (UV + orientation) when applied.
+  // This prevents "cropped / off-center" screens even if the GLB UVs use only a sub-rectangle.
+  pack.tex.flipY = false; // match glTF convention used by this project
+  pack.tex.wrapS = THREE.ClampToEdgeWrapping;
+  pack.tex.wrapT = THREE.ClampToEdgeWrapping;
+
+  state.screenFx[key] = pack;
+  return pack;
+}
+
+function drawScreenGlassBg(ctx, w, h, opts = {}) {
+  const {
+    radius = 34,
+    border = 3,
+    glow = 0.18,
+    accentA = 'rgba(133,245,255,0.35)',
+    accentB = 'rgba(123,134,255,0.20)',
+    inner = 'rgba(8,12,18,0.86)',
+    inset = 6,
+  } = opts;
+
+  const ix = Math.max(0, inset | 0);
+  const x0 = ix;
+  const y0 = ix;
+  const ww = Math.max(1, w - ix * 2);
+  const hh = Math.max(1, h - ix * 2);
+
+  ctx.clearRect(0, 0, w, h);
+
+  // Base fill to avoid black/transparent edges when using rounded rects
+  ctx.fillStyle = inner;
+  ctx.fillRect(0, 0, w, h);
+
+  const bg = ctx.createLinearGradient(0, 0, w, h);
+  bg.addColorStop(0, inner);
+  bg.addColorStop(0.55, 'rgba(12,18,26,0.92)');
+  bg.addColorStop(1, 'rgba(9,13,20,0.9)');
+  ctx.fillStyle = bg;
+  roundRect(ctx, x0, y0, ww, hh, radius);
+  ctx.fill();
+
+  if (glow > 0) {
+    const rg = ctx.createRadialGradient(w * 0.2, h * 0.25, 20, w * 0.35, h * 0.45, Math.max(w, h));
+    rg.addColorStop(0, accentA);
+    rg.addColorStop(0.45, accentB);
+    rg.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.globalAlpha = glow;
+    roundRect(ctx, x0, y0, ww, hh, radius);
+    ctx.fillStyle = rg;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  if (border > 0) {
+    ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+    ctx.lineWidth = border;
+    roundRect(ctx, x0, y0, ww, hh, radius);
+    ctx.stroke();
+  }
+
+  // Subtle glass shine (optional)
+  const clipInset = ix + 2;
+  const cx = clipInset;
+  const cy = clipInset;
+  const cw = Math.max(1, w - clipInset * 2);
+  const ch = Math.max(1, h - clipInset * 2);
+
+  ctx.save();
+  roundRect(ctx, cx, cy, cw, ch, Math.max(0, radius - 2));
+  ctx.clip();
+  const shine = ctx.createLinearGradient(0, 0, 0, h * 0.48);
+  shine.addColorStop(0, 'rgba(255,255,255,0.16)');
+  shine.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = shine;
+  ctx.fillRect(0, 0, w, h * 0.5);
+  ctx.restore();
+}
+
+function drawTabletBezelChrome(ctx, w, h, time = 0, opts = {}) {
+  const {
+    radius = 34,
+    outerPad = 2,
+    innerPad = 10,
+    bezelTint = 'rgba(170,210,255,0.16)',
+    edgeTint = 'rgba(120,220,255,0.32)',
+    cornerTint = 'rgba(184,234,255,0.46)',
+    sideButtons = true,
+    topTabs = true,
+    bottomDock = true,
+    leftButtons = 3,
+    rightButtons = 3,
+  } = opts;
+
+  // Outer metallic bezel ring
+  const metal = ctx.createLinearGradient(0, 0, w, h);
+  metal.addColorStop(0, 'rgba(46,60,80,0.36)');
+  metal.addColorStop(0.18, 'rgba(18,24,34,0.40)');
+  metal.addColorStop(0.52, bezelTint);
+  metal.addColorStop(0.84, 'rgba(22,28,40,0.38)');
+  metal.addColorStop(1, 'rgba(56,78,106,0.24)');
+  ctx.fillStyle = metal;
+  roundRect(ctx, outerPad, outerPad, w - outerPad * 2, h - outerPad * 2, radius + 4);
+  ctx.fill();
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.07)';
+  ctx.lineWidth = 2;
+  roundRect(ctx, outerPad + 1, outerPad + 1, w - (outerPad + 1) * 2, h - (outerPad + 1) * 2, radius + 3);
+  ctx.stroke();
+
+  // Inner neon rim
+  const rimG = ctx.createLinearGradient(0, 0, w, 0);
+  rimG.addColorStop(0, 'rgba(116,228,255,0.14)');
+  rimG.addColorStop(0.35, edgeTint);
+  rimG.addColorStop(0.7, 'rgba(131,151,255,0.24)');
+  rimG.addColorStop(1, 'rgba(116,228,255,0.14)');
+  ctx.strokeStyle = rimG;
+  ctx.lineWidth = 1.6;
+  roundRect(ctx, innerPad, innerPad, w - innerPad * 2, h - innerPad * 2, Math.max(8, radius - 8));
+  ctx.stroke();
+
+  // Micro scan grid clipped to screen body (under content, subtle)
+  ctx.save();
+  roundRect(ctx, innerPad + 2, innerPad + 2, w - (innerPad + 2) * 2, h - (innerPad + 2) * 2, Math.max(6, radius - 10));
+  ctx.clip();
+  ctx.strokeStyle = 'rgba(120,210,255,0.035)';
+  ctx.lineWidth = 1;
+  for (let y = innerPad + 18; y < h - innerPad - 8; y += 22) {
+    ctx.beginPath();
+    ctx.moveTo(innerPad + 8, y + ((time * 8) % 6));
+    ctx.lineTo(w - innerPad - 8, y + ((time * 8) % 6));
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // Corner bracket accents (tablet / sci-fi look)
+  ctx.strokeStyle = cornerTint;
+  ctx.lineWidth = 3;
+  const c = Math.max(18, Math.min(w, h) * 0.06);
+  const x1 = innerPad + 8, y1 = innerPad + 8;
+  const x2 = w - innerPad - 8, y2 = h - innerPad - 8;
+  const corners = [
+    [x1, y1, 1, 1],
+    [x2, y1, -1, 1],
+    [x1, y2, 1, -1],
+    [x2, y2, -1, -1],
+  ];
+  for (const [cx, cy, sx, sy] of corners) {
+    ctx.beginPath();
+    ctx.moveTo(cx + sx * c, cy);
+    ctx.lineTo(cx, cy);
+    ctx.lineTo(cx, cy + sy * c);
+    ctx.stroke();
+  }
+
+  // Decorative top tabs
+  if (topTabs) {
+    const tabY = innerPad + 4;
+    const tabW = Math.max(44, w * 0.12);
+    const gap = 10;
+    const startX = w - innerPad - tabW * 2 - gap - 20;
+    for (let i = 0; i < 2; i++) {
+      const x = startX + i * (tabW + gap);
+      const tg = ctx.createLinearGradient(x, tabY, x + tabW, tabY);
+      tg.addColorStop(0, 'rgba(111,228,255,0.12)');
+      tg.addColorStop(1, 'rgba(123,134,255,0.18)');
+      ctx.fillStyle = tg;
+      roundRect(ctx, x, tabY, tabW, 12, 6);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(173,235,255,0.18)';
+      ctx.lineWidth = 1;
+      roundRect(ctx, x, tabY, tabW, 12, 6);
+      ctx.stroke();
+    }
+  }
+
+  // Side button rails (buttons)
+  const drawRail = (side = 'left', count = 3) => {
+    if (count <= 0) return;
+    const railW = Math.max(12, Math.min(18, w * 0.02));
+    const railH = h * 0.58;
+    const rx = side === 'left' ? innerPad + 4 : w - innerPad - 4 - railW;
+    const ry = (h - railH) * 0.5;
+    const rg = ctx.createLinearGradient(rx, ry, rx + railW, ry);
+    rg.addColorStop(0, 'rgba(255,255,255,0.04)');
+    rg.addColorStop(0.5, 'rgba(122,146,170,0.12)');
+    rg.addColorStop(1, 'rgba(0,0,0,0.10)');
+    ctx.fillStyle = rg;
+    roundRect(ctx, rx, ry, railW, railH, 8);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(170,220,255,0.14)';
+    ctx.lineWidth = 1;
+    roundRect(ctx, rx, ry, railW, railH, 8);
+    ctx.stroke();
+
+    const btnGap = railH / (count + 1);
+    for (let i = 0; i < count; i++) {
+      const cy = ry + btnGap * (i + 1);
+      const bx = rx + railW * 0.5;
+      const pulse = 0.45 + 0.35 * Math.sin(time * 2.1 + i * 0.9 + (side === 'left' ? 0.4 : 1.2));
+      ctx.fillStyle = `rgba(12,18,28,0.90)`;
+      ctx.beginPath();
+      ctx.arc(bx, cy, railW * 0.28, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = `rgba(150,230,255,${(0.15 + pulse * 0.45).toFixed(3)})`;
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.arc(bx, cy, railW * 0.28, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = `rgba(111,235,255,${(0.12 + pulse * 0.38).toFixed(3)})`;
+      ctx.beginPath();
+      ctx.arc(bx, cy, railW * 0.12, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  };
+  if (sideButtons) {
+    drawRail('left', leftButtons);
+    drawRail('right', rightButtons);
+  }
+
+  // Bottom dock bar (more "tablet" hardware frame)
+  if (bottomDock) {
+    const dockW = w * 0.34;
+    const dockH = 16;
+    const dockX = w * 0.5 - dockW * 0.5;
+    const dockY = h - innerPad - dockH - 3;
+    const dg = ctx.createLinearGradient(dockX, dockY, dockX + dockW, dockY);
+    dg.addColorStop(0, 'rgba(123,134,255,0.10)');
+    dg.addColorStop(0.5, 'rgba(111,228,255,0.24)');
+    dg.addColorStop(1, 'rgba(123,134,255,0.10)');
+    ctx.fillStyle = dg;
+    roundRect(ctx, dockX, dockY, dockW, dockH, 7);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(190,240,255,0.12)';
+    ctx.lineWidth = 1;
+    roundRect(ctx, dockX, dockY, dockW, dockH, 7);
+    ctx.stroke();
+
+    const segW = dockW / 5;
+    for (let i = 1; i < 5; i++) {
+      ctx.strokeStyle = 'rgba(160,220,255,0.08)';
+      ctx.beginPath();
+      ctx.moveTo(dockX + i * segW, dockY + 2);
+      ctx.lineTo(dockX + i * segW, dockY + dockH - 2);
+      ctx.stroke();
+    }
+  }
+}
+
+function drawUiPill(ctx, x, y, w, h, label, opts = {}) {
+  const {
+    active = false,
+    accent = 'rgba(111,228,255,0.22)',
+    border = 'rgba(172,232,255,0.22)',
+    text = 'rgba(208,232,255,0.72)',
+    align = 'center',
+    font = '700 12px Inter, sans-serif',
+  } = opts;
+
+  const g = ctx.createLinearGradient(x, y, x + w, y + h);
+  g.addColorStop(0, active ? accent : 'rgba(255,255,255,0.03)');
+  g.addColorStop(1, active ? 'rgba(123,134,255,0.15)' : 'rgba(255,255,255,0.01)');
+  ctx.fillStyle = g;
+  roundRect(ctx, x, y, w, h, Math.min(h / 2, 8));
+  ctx.fill();
+  ctx.strokeStyle = border;
+  ctx.lineWidth = 1;
+  roundRect(ctx, x, y, w, h, Math.min(h / 2, 8));
+  ctx.stroke();
+
+  ctx.font = font;
+  ctx.fillStyle = text;
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = align;
+  const tx = align === 'left' ? x + 8 : align === 'right' ? x + w - 8 : x + w / 2;
+  ctx.fillText(label, tx, y + h / 2 + 0.5);
+}
+
+function drawLockGlyph(ctx, x, y, size, progressClosed) {
+  const p = clamp01(progressClosed);
+  const bodyW = size * 0.78;
+  const bodyH = size * 0.62;
+  const bodyX = x - bodyW / 2;
+  const bodyY = y + size * 0.06;
+
+  const shackleW = size * 0.52;
+  const shackleH = size * 0.46;
+  const shackleY = y - size * 0.06;
+  const openAngle = THREE.MathUtils.degToRad(-42) * (1 - p);
+  const lift = (1 - p) * size * 0.06;
+
+  ctx.save();
+  ctx.lineWidth = size * 0.08;
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = p < 0.5 ? 'rgba(111,255,203,0.95)' : 'rgba(170,220,255,0.95)';
+  ctx.translate(x, shackleY - lift);
+  ctx.rotate(openAngle);
+  ctx.beginPath();
+  ctx.moveTo(-shackleW / 2, shackleH / 2);
+  ctx.quadraticCurveTo(-shackleW / 2, -shackleH / 2, 0, -shackleH / 2);
+  ctx.quadraticCurveTo(shackleW / 2, -shackleH / 2, shackleW / 2, shackleH / 2);
+  ctx.stroke();
+  ctx.restore();
+
+  const bodyGrad = ctx.createLinearGradient(bodyX, bodyY, bodyX + bodyW, bodyY + bodyH);
+  bodyGrad.addColorStop(0, p < 0.5 ? 'rgba(20,54,45,0.95)' : 'rgba(16,38,62,0.95)');
+  bodyGrad.addColorStop(1, p < 0.5 ? 'rgba(13,31,26,0.95)' : 'rgba(9,24,42,0.95)');
+  ctx.fillStyle = bodyGrad;
+  roundRect(ctx, bodyX, bodyY, bodyW, bodyH, size * 0.12);
+  ctx.fill();
+
+  ctx.strokeStyle = p < 0.5 ? 'rgba(111,255,203,0.45)' : 'rgba(139,211,255,0.5)';
+  ctx.lineWidth = size * 0.04;
+  roundRect(ctx, bodyX, bodyY, bodyW, bodyH, size * 0.12);
+  ctx.stroke();
+
+  ctx.fillStyle = 'rgba(210,246,255,0.9)';
+  ctx.beginPath();
+  ctx.arc(x, bodyY + bodyH * 0.42, size * 0.07, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillRect(x - size * 0.03, bodyY + bodyH * 0.42, size * 0.06, size * 0.15);
+}
+
+function drawLidScreenCanvas(ctx, w, h, time) {
+  // Clean screen: no extra bezel/borders/buttons (hardware frame is already in the 3D model)
+  drawScreenGlassBg(ctx, w, h, {
+    radius: 0,
+    border: 0,
+    glow: 0.16,
+    inset: 0,
+    accentA: 'rgba(111,228,255,0.40)',
+    accentB: 'rgba(123,134,255,0.22)',
+    inner: 'rgba(7,11,17,0.96)',
+  });
+
+  const closeP = 1 - clamp01(state.lidAnimT);
+  const sealP = state.sealAnimPlaying ? easeOutCubic(closeP) : (state.sealed ? 1 : 0);
+
+  // Main lock glyph
+  drawLockGlyph(ctx, w * 0.5, h * 0.46, h * 0.68, sealP);
+
+  const status = state.sealed ? 'SEALED' : (state.sealAnimPlaying ? 'LOCKING…' : 'READY');
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  const titleGrad = ctx.createLinearGradient(w * 0.25, 0, w * 0.75, 0);
+  if (state.sealed) {
+    titleGrad.addColorStop(0, '#d7f2ff');
+    titleGrad.addColorStop(1, '#8ad5ff');
+  } else {
+    titleGrad.addColorStop(0, '#c8ffea');
+    titleGrad.addColorStop(1, '#83ffd0');
+  }
+
+  ctx.shadowColor = 'rgba(118,220,255,0.30)';
+  ctx.shadowBlur = 16;
+  ctx.fillStyle = titleGrad;
+  ctx.font = '800 64px Inter, sans-serif';
+  ctx.fillText(status, w / 2, h * 0.70);
+
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = 'rgba(211,233,255,0.66)';
+  ctx.font = '600 22px Inter, sans-serif';
+  ctx.fillText('TGE CAPSULE SECURITY', w / 2, h * 0.82);
+
+  // Centered progress bar
+  const barW = w * 0.56;
+  const barH = 26;
+  const barX = (w - barW) / 2;
+  const barY = h * 0.87;
+
+  ctx.fillStyle = 'rgba(255,255,255,0.06)';
+  roundRect(ctx, barX, barY, barW, barH, 13);
+  ctx.fill();
+
+  const fillP = state.sealed ? 1 : (state.sealAnimPlaying ? easeOutCubic(closeP) : 0.22 + Math.sin(time * 2.3) * 0.04);
+  const fillGrad = ctx.createLinearGradient(barX, barY, barX + barW, barY);
+  fillGrad.addColorStop(0, state.sealed ? 'rgba(120,214,255,0.95)' : 'rgba(111,255,203,0.95)');
+  fillGrad.addColorStop(1, 'rgba(125,136,255,0.9)');
+  ctx.fillStyle = fillGrad;
+  roundRect(ctx, barX + 2, barY + 2, Math.max(10, (barW - 4) * clamp01(fillP)), barH - 4, 11);
+  ctx.fill();
+
+  // Light sweep
+  const sweepX = ((time * 220) % (barW + 160)) - 80;
+  ctx.save();
+  roundRect(ctx, barX + 2, barY + 2, barW - 4, barH - 4, 11);
+  ctx.clip();
+  const sweep = ctx.createLinearGradient(barX + sweepX - 50, barY, barX + sweepX + 50, barY);
+  sweep.addColorStop(0, 'rgba(255,255,255,0)');
+  sweep.addColorStop(0.5, 'rgba(255,255,255,0.32)');
+  sweep.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = sweep;
+  ctx.fillRect(barX, barY, barW, barH);
+  ctx.restore();
+}
+
+
+function drawNameScreenCanvas(ctx, w, h, time) {
+  const nick = (state.nickname || 'PLAYER').slice(0, 24);
+
+  // Clean screen: no extra bezel/borders/buttons
+  drawScreenGlassBg(ctx, w, h, {
+    radius: 0,
+    border: 0,
+    glow: 0.12,
+    inset: 0,
+    accentA: 'rgba(130,220,255,0.22)',
+    accentB: 'rgba(123,134,255,0.16)',
+    inner: 'rgba(10,14,22,0.96)',
+  });
+
+  // Subtle scan lines
+  ctx.save();
+  ctx.globalAlpha = 0.55;
+  for (let i = 0; i < 9; i++) {
+    const yy = ((time * 46 + i * 34) % (h + 90)) - 45;
+    const g = ctx.createLinearGradient(0, yy, 0, yy + 20);
+    g.addColorStop(0, 'rgba(0,0,0,0)');
+    g.addColorStop(0.5, 'rgba(120,210,255,0.08)');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, yy, w, 20);
+  }
+  ctx.restore();
+
+  // Centered nickname (auto-size)
+  let size = 92;
+  if (nick.length > 14) size = 72;
+  if (nick.length > 18) size = 58;
+
+  const pulse = 0.98 + Math.sin(time * 3.4) * 0.02;
+  const nameGrad = ctx.createLinearGradient(0, 0, w, 0);
+  nameGrad.addColorStop(0, '#e8f8ff');
+  nameGrad.addColorStop(0.45, '#b8eeff');
+  nameGrad.addColorStop(1, '#9aaeff');
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.shadowColor = 'rgba(118,220,255,0.28)';
+  ctx.shadowBlur = 16;
+  ctx.fillStyle = nameGrad;
+  ctx.font = `800 ${Math.round(size * pulse)}px Inter, sans-serif`;
+  const nameY = h * 0.62;
+  ctx.save();
+  ctx.translate(w / 2, nameY);
+  ctx.scale(1.12, 1.0); // slight horizontal stretch
+  ctx.fillText(nick, 0, 0);
+  ctx.restore();
+
+  ctx.shadowBlur = 0;
+}
+
+
+function drawAvatarScreenCanvas(ctx, w, h, time) {
+  // Clean screen: no extra bezel/borders/buttons
+  drawScreenGlassBg(ctx, w, h, {
+    radius: 0,
+    border: 0,
+    glow: 0.12,
+    inset: 0,
+    accentA: 'rgba(111,228,255,0.18)',
+    accentB: 'rgba(123,134,255,0.12)',
+    inner: 'rgba(10,14,22,0.96)',
+  });
+
+  const innerX = 0;
+  const innerY = 0;
+  const innerW = w;
+  const innerH = h;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(innerX, innerY, innerW, innerH);
+  ctx.clip();
+
+  const img = state.avatarImgEl;
+  if (img && state.avatarImgLoaded) {
+    const floatX = Math.sin(time * 1.6) * 6;
+    const floatY = Math.cos(time * 1.9) * 5;
+
+    // 1) Fill background with a blurred "cover" (no empty bars)
+    ctx.save();
+    ctx.globalAlpha = 0.92;
+    ctx.filter = 'blur(18px)';
+    const coverScale = Math.max(innerW / img.width, innerH / img.height);
+    const cW = img.width * coverScale;
+    const cH = img.height * coverScale;
+    const cX = innerX + (innerW - cW) / 2;
+    const cY = innerY + (innerH - cH) / 2;
+    ctx.drawImage(img, cX, cY, cW, cH);
+    ctx.restore();
+
+    // 2) Darken a bit for readability
+    const bg = ctx.createLinearGradient(innerX, innerY, innerX + innerW, innerY + innerH);
+    bg.addColorStop(0, 'rgba(0,0,0,0.20)');
+    bg.addColorStop(1, 'rgba(0,0,0,0.34)');
+    ctx.fillStyle = bg;
+    ctx.fillRect(innerX, innerY, innerW, innerH);
+
+    // 3) Foreground avatar "contain" (NO cropping) — always centered
+    const containScale = Math.min(innerW / img.width, innerH / img.height) * 0.90 * (1.0 + Math.sin(time * 1.4) * 0.006); // slightly smaller
+    const dW = img.width * containScale;
+    const dH = img.height * containScale;
+    const dX = innerX + (innerW - dW) / 2 + floatX;
+    const dY = innerY + (innerH - dH) / 2 + floatY - innerH * 0.06; // lift a bit
+    ctx.drawImage(img, dX, dY, dW, dH);
+  } else {
+    const ph = ctx.createLinearGradient(innerX, innerY, innerX + innerW, innerY + innerH);
+    ph.addColorStop(0, 'rgba(28,38,56,0.95)');
+    ph.addColorStop(1, 'rgba(14,20,30,0.95)');
+    ctx.fillStyle = ph;
+    ctx.fillRect(innerX, innerY, innerW, innerH);
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = '700 30px Inter, sans-serif';
+    ctx.fillStyle = 'rgba(200,220,255,0.7)';
+    ctx.fillText('AVATAR', w / 2, h / 2);
+  }
+
+  // Sweep line (subtle)
+  const sweepY = ((time * 180) % (innerH + 160)) - 80;
+  const sg = ctx.createLinearGradient(0, innerY + sweepY - 40, 0, innerY + sweepY + 40);
+  sg.addColorStop(0, 'rgba(255,255,255,0)');
+  sg.addColorStop(0.5, 'rgba(170,232,255,0.12)');
+  sg.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = sg;
+  ctx.fillRect(innerX, innerY, innerW, innerH);
+
+  ctx.restore();
+}
+
+
+function renderDynamicScreens(force = false) {
+  const hasAny = state.screens.lid || state.screens.name || state.screens.avatar;
+  if (!hasAny) return;
+
+  const now = performance.now() * 0.001;
+  if (!force && (now - state.lastScreenFxDraw) < (1 / 30)) return;
+  state.lastScreenFxDraw = now;
+
+  if (state.screens.lid?.isMesh) {
+    const pack = ensureScreenFxPack('lid', 1024, 512);
+    drawLidScreenCanvas(pack.ctx, pack.width, pack.height, now);
+    pack.tex.needsUpdate = true;
+    const lidMat = state.screens.lid.material;
+    if (!(lidMat && (lidMat.emissiveMap === pack.tex || lidMat.map === pack.tex))) {
+      state.screens.lid.material = createScreenMaterial(pack.tex, 0xffffff, 1.15);
+    }
+    calibrateScreenTextureForMesh(state.screens.lid, pack.tex, 'lid');
+    state.screens.lid.material.emissiveIntensity = state.sealed ? 1.25 : 1.05;
+  }
+
+  if (state.screens.name?.isMesh) {
+    const pack = ensureScreenFxPack('name', 1024, 384);
+    drawNameScreenCanvas(pack.ctx, pack.width, pack.height, now);
+    pack.tex.needsUpdate = true;
+    const nameMat = state.screens.name.material;
+    if (!(nameMat && (nameMat.emissiveMap === pack.tex || nameMat.map === pack.tex))) {
+      state.screens.name.material = createScreenMaterial(pack.tex, 0xffffff, 1.0);
+    }
+    calibrateScreenTextureForMesh(state.screens.name, pack.tex, 'name');
+    state.screens.name.material.emissiveIntensity = 1.0 + Math.sin(now * 3.7) * 0.08;
+  }
+
+  if (state.screens.avatar?.isMesh) {
+    const pack = ensureScreenFxPack('avatar', 768, 768);
+    drawAvatarScreenCanvas(pack.ctx, pack.width, pack.height, now);
+    pack.tex.needsUpdate = true;
+    const avMat = state.screens.avatar.material;
+    if (!(avMat && (avMat.emissiveMap === pack.tex || avMat.map === pack.tex))) {
+      state.screens.avatar.material = createScreenMaterial(pack.tex, 0xffffff, 0.95);
+    }
+    calibrateScreenTextureForMesh(state.screens.avatar, pack.tex, 'avatar');
+    state.screens.avatar.material.emissiveIntensity = 0.95 + Math.sin(now * 3.1 + 0.8) * 0.06;
+  }
+}
+
+function prepareAvatarImageForScreens() {
+  if (!state.avatarDataUrl) {
+    state.avatarImgEl = null;
+    state.avatarImgLoaded = false;
+    return;
+  }
+  const img = new Image();
+  img.onload = () => {
+    state.avatarImgEl = img;
+    state.avatarImgLoaded = true;
+    renderDynamicScreens(true);
+  };
+  img.onerror = () => {
+    state.avatarImgEl = null;
+    state.avatarImgLoaded = false;
+  };
+  img.src = state.avatarDataUrl;
+}
+
+function makeEdgeGlowForMesh(mesh) {
+  if (!mesh?.isMesh || !mesh.geometry) return;
+  if (mesh.userData.__edgeGlowAdded) return;
+  mesh.userData.__edgeGlowAdded = true;
+  try {
+    const edgeGeo = new THREE.EdgesGeometry(mesh.geometry, 34);
+    const edgeMat = new THREE.LineBasicMaterial({
+      color: 0x84d8ff,
+      transparent: true,
+      opacity: 0.22,
+    });
+    const edges = new THREE.LineSegments(edgeGeo, edgeMat);
+    edges.name = `${mesh.name || 'mesh'}__edgeglow`;
+    edges.renderOrder = 3;
+    mesh.add(edges);
+  } catch (e) {
+    console.warn('edge glow failed for mesh', mesh.name, e);
+  }
+}
+
+function enhanceCapsuleAppearance() {
+  const roots = [state.capsuleBase, state.capsuleLid].filter(Boolean);
+  const seen = new Set();
+
+  roots.forEach((rootObj) => {
+    rootObj.traverse((obj) => {
+      if (!obj?.isMesh || seen.has(obj)) return;
+      seen.add(obj);
+
+      const n = (obj.name || '').toLowerCase();
+      if (n.includes('screen_')) return;
+
+      const orig = obj.material;
+      if (!orig) return;
+      const mats = Array.isArray(orig) ? orig : [orig];
+      const converted = mats.map((m) => {
+        if (!m || m.userData?.__enhancedCapsuleMat) return m;
+        const hasTexture = !!m.map;
+        const baseColor = m.color ? m.color.clone() : new THREE.Color(0xffffff);
+        const luminance = (baseColor.r + baseColor.g + baseColor.b) / 3;
+        const isDarkDecal = hasTexture && luminance < 0.2;
+
+        if (isDarkDecal) {
+          const mm = m.clone();
+          if ('roughness' in mm) mm.roughness = 0.65;
+          if ('metalness' in mm) mm.metalness = 0.02;
+          mm.userData.__enhancedCapsuleMat = true;
+          return mm;
+        }
+
+        const pm = new THREE.MeshPhysicalMaterial({
+          color: baseColor,
+          map: m.map || null,
+          normalMap: m.normalMap || null,
+          roughnessMap: m.roughnessMap || null,
+          metalnessMap: m.metalnessMap || null,
+          aoMap: m.aoMap || null,
+          emissiveMap: m.emissiveMap || null,
+          transparent: !!m.transparent,
+          opacity: m.opacity ?? 1,
+          side: m.side ?? THREE.FrontSide,
+          depthWrite: m.depthWrite ?? true,
+          depthTest: m.depthTest ?? true,
+          metalness: hasTexture ? 0.58 : 0.78,
+          roughness: hasTexture ? 0.38 : 0.24,
+          clearcoat: 0.75,
+          clearcoatRoughness: 0.18,
+          sheen: 0.2,
+          sheenColor: new THREE.Color(0x8fd4ff),
+          emissive: new THREE.Color(0x050a12),
+          emissiveIntensity: 0.12,
+        });
+
+        if (pm.map) pm.map.colorSpace = THREE.SRGBColorSpace;
+        pm.userData.__enhancedCapsuleMat = true;
+        return pm;
+      });
+
+      obj.material = Array.isArray(orig) ? converted : converted[0];
+      if (!n.includes('plane')) makeEdgeGlowForMesh(obj);
+    });
+  });
+}
+
+// ---------- Dynamic textures ----------
+function makeCanvasTexture(width, height, painter) {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+
+  const ctx = canvas.getContext('2d');
+  painter(ctx, width, height);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.flipY = false;
+  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+
+function roundRect(ctx, x, y, w, h, r) {
+  const rr = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rr);
+  ctx.arcTo(x + w, y + h, x, y + h, rr);
+  ctx.arcTo(x, y + h, x, y, rr);
+  ctx.arcTo(x, y, x + w, y, rr);
+  ctx.closePath();
+}
+
+function placeholderMaterial(label) {
+  const tex = makeCanvasTexture(1024, 512, (ctx, w, h) => {
+    ctx.clearRect(0, 0, w, h);
+
+    ctx.fillStyle = 'rgba(255,255,255,0.12)';
+    roundRect(ctx, 8, 8, w - 16, h - 16, 40);
+    ctx.fill();
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+    ctx.lineWidth = 4;
+    ctx.stroke();
+
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.font = '600 44px Inter, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, w / 2, h / 2);
+  });
+
+  // IMPORTANT: screens must be readable even in dark lighting + ACES tonemapping.
+  // Drive the UI through emissiveMap (self-lit), not only through `map`.
+  const mat = new THREE.MeshStandardMaterial({
+    map: tex,
+    emissive: new THREE.Color(0xffffff),
+    emissiveMap: tex,
+    emissiveIntensity: 1.0,
+    transparent: true,
+    opacity: 1,
+    metalness: 0.0,
+    roughness: 0.55,
+  });
+  mat.toneMapped = false;
+  return mat;
+}
+
+function setupScreenPlaceholders() {
+  if (state.screens.lid?.isMesh) {
+    state.screens.lid.material = placeholderMaterial('LOCK');
+    if (state.screens.lid.material?.map) calibrateScreenTextureForMesh(state.screens.lid, state.screens.lid.material.map, 'lid');
+  }
+  if (state.screens.name?.isMesh) {
+    state.screens.name.material = placeholderMaterial('NAME');
+    if (state.screens.name.material?.map) calibrateScreenTextureForMesh(state.screens.name, state.screens.name.material.map, 'name');
+  }
+  if (state.screens.avatar?.isMesh) {
+    state.screens.avatar.material = placeholderMaterial('AVATAR');
+    if (state.screens.avatar.material?.map) calibrateScreenTextureForMesh(state.screens.avatar, state.screens.avatar.material.map, 'avatar');
+  }
+}
+
+
+function updateDynamicTextures() {
+  if (state.avatarDataUrl && (!state.avatarImgEl || !state.avatarImgLoaded)) {
+    prepareAvatarImageForScreens();
+  }
+  renderDynamicScreens(true);
 }
 
 // ---------- UI logic ----------
@@ -1475,6 +2771,7 @@ function captureCapsuleTransparentDataUrl() {
   try {
     scene.background = null;
     if (typeof floor !== 'undefined' && floor) floor.visible = false;
+    renderDynamicScreens?.(true);
     renderer.render(scene, camera);
     return renderer.domElement.toDataURL('image/png');
   } finally {
@@ -1838,6 +3135,7 @@ ui.avatarInput.addEventListener('change', async () => {
   try {
     const dataUrl = await fileToDataURL(file);
     state.avatarDataUrl = dataUrl;
+    prepareAvatarImageForScreens();
 
     ui.avatarPreview.innerHTML = '';
     const img = document.createElement('img');
@@ -1879,6 +3177,7 @@ ui.introForm.addEventListener('submit', async (e) => {
 
       const dataUrl = await fileToDataURL(pickedFile);
       state.avatarDataUrl = dataUrl;
+      prepareAvatarImageForScreens();
 
       ui.avatarPreview.innerHTML = '';
       const img = document.createElement('img');
@@ -1909,6 +3208,7 @@ ui.introForm.addEventListener('submit', async (e) => {
 
   persistCapsuleState();
   updateSealButtonState();
+  updateDynamicTextures();
 });
 
 ui.messageInput.addEventListener('input', () => {
@@ -2004,6 +3304,9 @@ function animateSealSequence() {
     const spinEnd = state.letterPropReady ? 0.995 : 0.92;
     const spinPhase = clamp01((t - spinStart) / Math.max(1e-4, (spinEnd - spinStart)));
     state.spinAngle = state.sealSpinTargetDelta * easeInOutCubic(spinPhase);
+
+    renderDynamicScreens();
+
     if (t < 1) {
       requestAnimationFrame(step);
       return;
@@ -2036,6 +3339,7 @@ function animateSealSequence() {
 
     persistCapsuleState();
     updateSealButtonState();
+    updateDynamicTextures();
     saveCapsuleFeedEntry();
   }
 
@@ -2071,9 +3375,19 @@ function tick() {
     }
   }
 
+  // Dynamic electronic screens (lock/name/avatar)
+  if (state.readyProfile || state.sealAnimPlaying || state.sealed) {
+    renderDynamicScreens();
+  }
+
+  // Gentle idle pulse while box is open
   const tNow = clock.elapsedTime;
   if (!state.sealAnimPlaying && !state.sealed) {
+    if (state.screens.name?.material) {
+      state.screens.name.material.emissiveIntensity = 1.0 + Math.sin(tNow * 2.8) * 0.08;
     }
+    if (state.screens.avatar?.material) {
+      state.screens.avatar.material.emissiveIntensity = 0.95 + Math.sin(tNow * 2.3 + 0.7) * 0.06;
     }
   }
 
