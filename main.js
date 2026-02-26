@@ -35,169 +35,14 @@ const ui = {
 // Values are normalized: x/y are in screen widths/heights (-0.40..0.40).
 const screenTuner = {
   // x/y are in screen fraction (-1..1), scale/stretch are multipliers, rotate is in degrees
-  name:   { x: 0.00, y: 0.00, scale: 1.00, stretchX: 1.00, stretchY: 1.00, rotate: 0, flipX: false, flipY: false },
-  avatar: { x: 0.00, y: 0.00, scale: 0.82, stretchX: 1.00, stretchY: 1.00, rotate: 0, flipX: false, flipY: false },
-  lid:    { x: 0.00, y: 0.00, scale: 1.00, stretchX: 1.00, stretchY: 1.00, rotate: 0, flipX: false, flipY: false },
+  name:   { x: 0.00, y: 0.250, scale: 1.00, stretchX: 1.80, stretchY: 1.00, rotate: -90, flipX: true, flipY: false },
+  avatar: { x: 0.00, y: -0.145, scale: 0.90, stretchX: 1.12, stretchY: 1.00, rotate: 0, flipX: true, flipY: true },
+  lid:    { x: 0.275, y: 0.160, scale: 0.60, stretchX: 1.00, stretchY: 1.00, rotate: 0, flipX: true, flipY: true },
 };
 
-function mountScreenTunerUI() {
-  window.__SCREEN_TUNER_DYNAMIC = true;
-  // Don't mount twice
-  if (document.getElementById('screenTuner')) return;
+// Screen tuner UI removed after calibration.
+window.__SCREEN_TUNER_DYNAMIC = false;
 
-  const wrap = document.createElement('div');
-  wrap.id = 'screenTuner';
-  wrap.style.cssText = `
-    position:fixed; top:12px; right:12px; z-index:99999;
-    width:280px; padding:10px 10px 8px;
-    background:rgba(0,0,0,.58); color:#fff;
-    font:12px/1.25 system-ui, -apple-system, Segoe UI, Roboto, Arial;
-    border:1px solid rgba(255,255,255,.18); border-radius:12px;
-    backdrop-filter: blur(8px);
-    user-select:none;
-  `;
-
-  const row = (label, id, min, max, step, value) => `
-    <label style="display:flex; gap:8px; align-items:center; margin:4px 0;">
-      <span style="width:46px; opacity:.9;">${label}</span>
-      <input id="${id}" type="range" min="${min}" max="${max}" step="${step}" value="${value}" style="width:100%;">
-    </label>
-  `;
-  const flipRow = (prefix, label) => `
-    <div style="display:flex; gap:10px; align-items:center; margin:2px 0 8px;">
-      <span style="width:80px; opacity:.9; font-weight:600;">${label}</span>
-      <label style="display:flex; gap:6px; align-items:center; opacity:.9;">
-        <input id="${prefix}FlipX" type="checkbox"> Flip X
-      </label>
-      <label style="display:flex; gap:6px; align-items:center; opacity:.9;">
-        <input id="${prefix}FlipY" type="checkbox"> Flip Y
-      </label>
-    </div>
-  `;
-
-  wrap.innerHTML = `
-    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
-      <div style="font-weight:800;">Screen Tuner</div>
-      <button id="stHide" style="border:1px solid rgba(255,255,255,.22); background:rgba(255,255,255,.08); color:#fff; border-radius:10px; padding:6px 10px; cursor:pointer;">Hide</button>
-    </div>
-
-    <div style="opacity:.92; font-weight:700; margin:6px 0 4px;">screen_name</div>
-    ${row('X', 'nX', -0.40, 0.40, 0.005, 0)}
-    ${row('Y', 'nY', -0.40, 0.40, 0.005, 0)}
-    ${row('Scale', 'nS', 0.20, 2.00, 0.01, 1.00)}
-    ${row('StrX', 'nSX', 0.50, 1.80, 0.01, 1.00)}
-    ${row('StrY', 'nSY', 0.50, 1.80, 0.01, 1.00)}
-    ${row('Rot', 'nR', -180, 180, 1, 0)}
-    ${flipRow('n', 'Flip')}
-    <div id="nVal" style="opacity:.85; margin:2px 0 8px;"></div>
-
-    <div style="opacity:.92; font-weight:700; margin:6px 0 4px;">screen_avatar</div>
-    ${row('X', 'aX', -0.40, 0.40, 0.005, 0)}
-    ${row('Y', 'aY', -0.40, 0.40, 0.005, 0)}
-    ${row('Scale', 'aS', 0.20, 2.00, 0.01, 0.82)}
-    ${row('StrX', 'aSX', 0.50, 1.80, 0.01, 1.00)}
-    ${row('StrY', 'aSY', 0.50, 1.80, 0.01, 1.00)}
-    ${row('Rot', 'aR', -180, 180, 1, 0)}
-    ${flipRow('a', 'Flip')}
-    <div id="aVal" style="opacity:.85; margin:2px 0 8px;"></div>
-
-    <div style="opacity:.92; font-weight:700; margin:6px 0 4px;">screen_lid</div>
-    ${row('X', 'lX', -0.40, 0.40, 0.005, 0)}
-    ${row('Y', 'lY', -0.40, 0.40, 0.005, 0)}
-    ${row('Scale', 'lS', 0.20, 2.00, 0.01, 1.00)}
-    ${row('StrX', 'lSX', 0.50, 1.80, 0.01, 1.00)}
-    ${row('StrY', 'lSY', 0.50, 1.80, 0.01, 1.00)}
-    ${row('Rot', 'lR', -180, 180, 1, 0)}
-    ${flipRow('l', 'Flip')}
-    <div id="lVal" style="opacity:.85; margin:2px 0 10px;"></div>
-
-    <button id="copyTuners" style="
-      width:100%; padding:8px 10px; border-radius:10px;
-      border:1px solid rgba(255,255,255,.22);
-      background:rgba(255,255,255,.08); color:#fff; cursor:pointer;
-    ">Copy values</button>
-
-    <div style="opacity:.6; margin-top:8px;">Tip: press <b>T</b> to toggle panel</div>
-  `;
-
-  const $ = (id) => wrap.querySelector(`#${id}`);
-
-  const update = () => {
-    screenTuner.name.x = parseFloat($('nX').value);
-    screenTuner.name.y = parseFloat($('nY').value);
-    screenTuner.name.scale = parseFloat($('nS').value);
-    screenTuner.name.stretchX = parseFloat($('nSX').value);
-    screenTuner.name.stretchY = parseFloat($('nSY').value);
-    screenTuner.name.rotate = parseFloat($('nR').value);
-    screenTuner.name.flipX = $('nFlipX').checked;
-    screenTuner.name.flipY = $('nFlipY').checked;
-
-    screenTuner.avatar.x = parseFloat($('aX').value);
-    screenTuner.avatar.y = parseFloat($('aY').value);
-    screenTuner.avatar.scale = parseFloat($('aS').value);
-    screenTuner.avatar.stretchX = parseFloat($('aSX').value);
-    screenTuner.avatar.stretchY = parseFloat($('aSY').value);
-    screenTuner.avatar.rotate = parseFloat($('aR').value);
-    screenTuner.avatar.flipX = $('aFlipX').checked;
-    screenTuner.avatar.flipY = $('aFlipY').checked;
-
-    screenTuner.lid.x = parseFloat($('lX').value);
-    screenTuner.lid.y = parseFloat($('lY').value);
-    screenTuner.lid.scale = parseFloat($('lS').value);
-    screenTuner.lid.stretchX = parseFloat($('lSX').value);
-    screenTuner.lid.stretchY = parseFloat($('lSY').value);
-    screenTuner.lid.rotate = parseFloat($('lR').value);
-    screenTuner.lid.flipX = $('lFlipX').checked;
-    screenTuner.lid.flipY = $('lFlipY').checked;
-
-    $('nVal').textContent =
-      `x=${screenTuner.name.x.toFixed(3)}  y=${screenTuner.name.y.toFixed(3)}  s=${screenTuner.name.scale.toFixed(2)}  sx=${screenTuner.name.stretchX.toFixed(2)}  sy=${screenTuner.name.stretchY.toFixed(2)}  r=${screenTuner.name.rotate.toFixed(0)}°  flipX=${screenTuner.name.flipX}  flipY=${screenTuner.name.flipY}`;
-    $('aVal').textContent =
-      `x=${screenTuner.avatar.x.toFixed(3)}  y=${screenTuner.avatar.y.toFixed(3)}  s=${screenTuner.avatar.scale.toFixed(2)}  sx=${screenTuner.avatar.stretchX.toFixed(2)}  sy=${screenTuner.avatar.stretchY.toFixed(2)}  r=${screenTuner.avatar.rotate.toFixed(0)}°  flipX=${screenTuner.avatar.flipX}  flipY=${screenTuner.avatar.flipY}`;
-    $('lVal').textContent =
-      `x=${screenTuner.lid.x.toFixed(3)}  y=${screenTuner.lid.y.toFixed(3)}  s=${screenTuner.lid.scale.toFixed(2)}  sx=${screenTuner.lid.stretchX.toFixed(2)}  sy=${screenTuner.lid.stretchY.toFixed(2)}  r=${screenTuner.lid.rotate.toFixed(0)}°  flipX=${screenTuner.lid.flipX}  flipY=${screenTuner.lid.flipY}`;
-
-    // Force redraw next frame
-    state.lastScreenFxDraw = 0;
-  };
-
-  // seed checkbox defaults
-  $('nFlipX').checked = screenTuner.name.flipX;
-  $('nFlipY').checked = screenTuner.name.flipY;
-  $('nR').value = screenTuner.name.rotate;
-  $('aFlipX').checked = screenTuner.avatar.flipX;
-  $('aFlipY').checked = screenTuner.avatar.flipY;
-  $('aR').value = screenTuner.avatar.rotate;
-  $('lFlipX').checked = screenTuner.lid.flipX;
-  $('lFlipY').checked = screenTuner.lid.flipY;
-  $('lR').value = screenTuner.lid.rotate;
-
-  wrap.querySelectorAll('input').forEach((inp) => inp.addEventListener('input', update));
-  wrap.querySelectorAll('input[type="checkbox"]').forEach((inp) => inp.addEventListener('change', update));
-
-  $('copyTuners').addEventListener('click', async () => {
-    const text =
-`screen_name:  x=${screenTuner.name.x.toFixed(3)}, y=${screenTuner.name.y.toFixed(3)}, scale=${screenTuner.name.scale.toFixed(2)}, stretchX=${screenTuner.name.stretchX.toFixed(2)}, stretchY=${screenTuner.name.stretchY.toFixed(2)}, rotate=${screenTuner.name.rotate.toFixed(0)}, flipX=${screenTuner.name.flipX}, flipY=${screenTuner.name.flipY}
-screen_avatar: x=${screenTuner.avatar.x.toFixed(3)}, y=${screenTuner.avatar.y.toFixed(3)}, scale=${screenTuner.avatar.scale.toFixed(2)}, stretchX=${screenTuner.avatar.stretchX.toFixed(2)}, stretchY=${screenTuner.avatar.stretchY.toFixed(2)}, rotate=${screenTuner.avatar.rotate.toFixed(0)}, flipX=${screenTuner.avatar.flipX}, flipY=${screenTuner.avatar.flipY}
-screen_lid:    x=${screenTuner.lid.x.toFixed(3)}, y=${screenTuner.lid.y.toFixed(3)}, scale=${screenTuner.lid.scale.toFixed(2)}, stretchX=${screenTuner.lid.stretchX.toFixed(2)}, stretchY=${screenTuner.lid.stretchY.toFixed(2)}, rotate=${screenTuner.lid.rotate.toFixed(0)}, flipX=${screenTuner.lid.flipX}, flipY=${screenTuner.lid.flipY}`;
-    try { await navigator.clipboard.writeText(text); } catch {}
-    console.log(text);
-    alert('Copied (also logged in console).');
-  });
-
-  $('stHide').addEventListener('click', () => wrap.remove());
-
-  document.body.appendChild(wrap);
-  update();
-}
-
-document.addEventListener('keydown', (e) => {
-  if (e.key && e.key.toLowerCase() === 't') {
-    const ex = document.getElementById('screenTuner');
-    if (ex) ex.remove();
-    else mountScreenTunerUI();
-  }
-});
 
 
 
@@ -3605,6 +3450,5 @@ function tick() {
   requestAnimationFrame(tick);
 }
 
-mountScreenTunerUI();
 resize();
 tick();
