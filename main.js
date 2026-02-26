@@ -1549,18 +1549,24 @@ function makeCanvasPack(width, height, painter) {
   return { canvas, ctx, tex, width, height };
 }
 
-function createScreenMaterial(tex, emissiveHex = 0x0a1320, emissiveIntensity = 0.55) {
-  return new THREE.MeshPhysicalMaterial({
-    map: tex,
+function createScreenMaterial(tex, emissiveHex = 0xffffff, emissiveIntensity = 1.0) {
+  // IMPORTANT: If we use only `map`, the screen UI gets multiplied by scene lighting and can look black.
+  // Use emissiveMap so the UI is self-lit, while keeping a subtle physical "glass" feel.
+  const mat = new THREE.MeshPhysicalMaterial({
+    color: new THREE.Color(0x0b0f18),
+    map: null,
     transparent: true,
     opacity: 1,
-    metalness: 0.06,
-    roughness: 0.28,
-    clearcoat: 0.75,
+    metalness: 0.02,
+    roughness: 0.38,
+    clearcoat: 0.85,
     clearcoatRoughness: 0.22,
     emissive: new THREE.Color(emissiveHex),
+    emissiveMap: tex,
     emissiveIntensity,
   });
+  mat.toneMapped = false;
+  return mat;
 }
 
 function ensureScreenFxPack(key, width, height) {
@@ -2165,33 +2171,36 @@ function renderDynamicScreens(force = false) {
     const pack = ensureScreenFxPack('lid', 1024, 512);
     drawLidScreenCanvas(pack.ctx, pack.width, pack.height, now);
     pack.tex.needsUpdate = true;
-    if (!(state.screens.lid.material && state.screens.lid.material.map === pack.tex)) {
-      state.screens.lid.material = createScreenMaterial(pack.tex, 0x071a19, 0.75);
+    const lidMat = state.screens.lid.material;
+    if (!(lidMat && (lidMat.emissiveMap === pack.tex || lidMat.map === pack.tex))) {
+      state.screens.lid.material = createScreenMaterial(pack.tex, 0xffffff, 1.15);
     }
     calibrateScreenTextureForMesh(state.screens.lid, pack.tex);
-    state.screens.lid.material.emissiveIntensity = state.sealed ? 0.9 : 0.72;
+    state.screens.lid.material.emissiveIntensity = state.sealed ? 1.25 : 1.05;
   }
 
   if (state.screens.name?.isMesh) {
     const pack = ensureScreenFxPack('name', 1024, 384);
     drawNameScreenCanvas(pack.ctx, pack.width, pack.height, now);
     pack.tex.needsUpdate = true;
-    if (!(state.screens.name.material && state.screens.name.material.map === pack.tex)) {
-      state.screens.name.material = createScreenMaterial(pack.tex, 0x0a1220, 0.65);
+    const nameMat = state.screens.name.material;
+    if (!(nameMat && (nameMat.emissiveMap === pack.tex || nameMat.map === pack.tex))) {
+      state.screens.name.material = createScreenMaterial(pack.tex, 0xffffff, 1.0);
     }
     calibrateScreenTextureForMesh(state.screens.name, pack.tex);
-    state.screens.name.material.emissiveIntensity = 0.58 + Math.sin(now * 3.7) * 0.06;
+    state.screens.name.material.emissiveIntensity = 1.0 + Math.sin(now * 3.7) * 0.08;
   }
 
   if (state.screens.avatar?.isMesh) {
     const pack = ensureScreenFxPack('avatar', 768, 768);
     drawAvatarScreenCanvas(pack.ctx, pack.width, pack.height, now);
     pack.tex.needsUpdate = true;
-    if (!(state.screens.avatar.material && state.screens.avatar.material.map === pack.tex)) {
-      state.screens.avatar.material = createScreenMaterial(pack.tex, 0x091523, 0.62);
+    const avMat = state.screens.avatar.material;
+    if (!(avMat && (avMat.emissiveMap === pack.tex || avMat.map === pack.tex))) {
+      state.screens.avatar.material = createScreenMaterial(pack.tex, 0xffffff, 0.95);
     }
     calibrateScreenTextureForMesh(state.screens.avatar, pack.tex);
-    state.screens.avatar.material.emissiveIntensity = 0.55 + Math.sin(now * 3.1 + 0.8) * 0.05;
+    state.screens.avatar.material.emissiveIntensity = 0.95 + Math.sin(now * 3.1 + 0.8) * 0.06;
   }
 }
 
@@ -2347,15 +2356,20 @@ function placeholderMaterial(label) {
     ctx.fillText(label, w / 2, h / 2);
   });
 
-  return new THREE.MeshStandardMaterial({
+  // IMPORTANT: screens must be readable even in dark lighting + ACES tonemapping.
+  // Drive the UI through emissiveMap (self-lit), not only through `map`.
+  const mat = new THREE.MeshStandardMaterial({
     map: tex,
+    emissive: new THREE.Color(0xffffff),
+    emissiveMap: tex,
+    emissiveIntensity: 1.0,
     transparent: true,
-    opacity: 0.9,
-    metalness: 0,
-    roughness: 0.45,
-    emissive: new THREE.Color(0x111827),
-    emissiveIntensity: 0.3,
+    opacity: 1,
+    metalness: 0.0,
+    roughness: 0.55,
   });
+  mat.toneMapped = false;
+  return mat;
 }
 
 function setupScreenPlaceholders() {
@@ -3240,10 +3254,10 @@ function tick() {
   const tNow = clock.elapsedTime;
   if (!state.sealAnimPlaying && !state.sealed) {
     if (state.screens.name?.material) {
-      state.screens.name.material.emissiveIntensity = 0.58 + Math.sin(tNow * 2.8) * 0.05;
+      state.screens.name.material.emissiveIntensity = 1.0 + Math.sin(tNow * 2.8) * 0.08;
     }
     if (state.screens.avatar?.material) {
-      state.screens.avatar.material.emissiveIntensity = 0.56 + Math.sin(tNow * 2.3 + 0.7) * 0.05;
+      state.screens.avatar.material.emissiveIntensity = 0.95 + Math.sin(tNow * 2.3 + 0.7) * 0.06;
     }
   }
 
