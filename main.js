@@ -358,29 +358,6 @@ function findCapsuleParts(root) {
   });
 }
 
-// ---------- Screen hardware cleanup ----------
-// In this GLB export, the *physical* bezels / button blocks around the side screens
-// are separate meshes (Object_4/Object_6/Object_8/Object_12 + numbered variants).
-// If you want the displays to look "flush" (no borders / no buttons), we can simply
-// hide those meshes at runtime without touching the screen_* meshes themselves.
-function hideScreenBezelsAndButtons(root) {
-  if (!root) return;
-  const kill = new Set([
-    // avatar module bezel + tabs
-    'Object_4', 'Object_6', 'Object_8', 'Object_12',
-    // name module bezel + tabs
-    'Object_4.001', 'Object_6.002', 'Object_8.002', 'Object_12.001',
-    // logo small module bezel + tabs (if present)
-    'Object_4.002', 'Object_6.003', 'Object_8.003', 'Object_12.002',
-    // lid side button strip (small hardware detail)
-    'Object_9',
-  ]);
-
-  root.traverse((o) => {
-    if (kill.has(o.name)) o.visible = false;
-  });
-}
-
 function getCapsuleBounds() {
   const box = new THREE.Box3();
   box.makeEmpty();
@@ -1077,9 +1054,6 @@ loader.load(
     state.screens.lid = gltf.scene.getObjectByName('screen_lid');
     state.screens.name = gltf.scene.getObjectByName('screen_name');
     state.screens.avatar = gltf.scene.getObjectByName('screen_avatar');
-
-    // Remove the extra 3D bezels + button blocks around the screens (user request)
-    hideScreenBezelsAndButtons(gltf.scene);
 
     // Lid pose setup
     if (state.lidBone || state.lidControl) {
