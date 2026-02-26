@@ -1688,6 +1688,14 @@ const dv = (maxV - minV) || 1;
     } else {
       // Side screens: -90° (standard for this export)
       orient = rotAround(-Math.PI / 2);
+
+      // Requested: screen_name + screen_avatar are mirrored on this model
+      // so we flip both axes to make the content appear upright and centered.
+      if (kind === 'name' || kind === 'avatar') {
+        const flipXY = new THREE.Matrix3();
+        flipXY.set(-1, 0, 1, 0, -1, 1, 0, 0, 1);
+        orient = flipXY.multiply(orient);
+      }
     }
 
     // Final: orient * bounds
@@ -2185,7 +2193,13 @@ function drawNameScreenCanvas(ctx, w, h, time) {
   ctx.shadowBlur = 16;
   ctx.fillStyle = nameGrad;
   ctx.font = `800 ${Math.round(size * pulse)}px Inter, sans-serif`;
-  ctx.fillText(nick, w / 2, h / 2);
+  // Requested: move nickname slightly down + stretch a bit for this screen
+  const nameY = h * 0.60;
+  ctx.save();
+  ctx.translate(w / 2, nameY);
+  ctx.scale(1.14, 1.02); // a bit wider + tiny vertical stretch
+  ctx.fillText(nick, 0, 0);
+  ctx.restore();
 
   ctx.shadowBlur = 0;
 }
@@ -2238,11 +2252,11 @@ function drawAvatarScreenCanvas(ctx, w, h, time) {
     ctx.fillRect(innerX, innerY, innerW, innerH);
 
     // 3) Foreground avatar "contain" (NO cropping) — always centered
-    const containScale = Math.min(innerW / img.width, innerH / img.height) * (1.0 + Math.sin(time * 1.4) * 0.006);
+    const containScale = Math.min(innerW / img.width, innerH / img.height) * 0.88 * (1.0 + Math.sin(time * 1.4) * 0.006);
     const dW = img.width * containScale;
     const dH = img.height * containScale;
     const dX = innerX + (innerW - dW) / 2 + floatX;
-    const dY = innerY + (innerH - dH) / 2 + floatY;
+    const dY = innerY + (innerH - dH) / 2 + floatY - innerH * 0.06;
     ctx.drawImage(img, dX, dY, dW, dH);
   } else {
     const ph = ctx.createLinearGradient(innerX, innerY, innerX + innerW, innerY + innerH);
@@ -2299,7 +2313,7 @@ function renderDynamicScreens(force = false) {
     if (!(nameMat && (nameMat.emissiveMap === pack.tex || nameMat.map === pack.tex))) {
       state.screens.name.material = createScreenMaterial(pack.tex, 0xffffff, 1.0);
     }
-    calibrateScreenTextureForMesh(state.screens.name, pack.tex, 'side');
+    calibrateScreenTextureForMesh(state.screens.name, pack.tex, 'name');
     state.screens.name.material.emissiveIntensity = 1.0 + Math.sin(now * 3.7) * 0.08;
   }
 
@@ -2311,7 +2325,7 @@ function renderDynamicScreens(force = false) {
     if (!(avMat && (avMat.emissiveMap === pack.tex || avMat.map === pack.tex))) {
       state.screens.avatar.material = createScreenMaterial(pack.tex, 0xffffff, 0.95);
     }
-    calibrateScreenTextureForMesh(state.screens.avatar, pack.tex, 'side');
+    calibrateScreenTextureForMesh(state.screens.avatar, pack.tex, 'avatar');
     state.screens.avatar.material.emissiveIntensity = 0.95 + Math.sin(now * 3.1 + 0.8) * 0.06;
   }
 }
@@ -2491,11 +2505,11 @@ function setupScreenPlaceholders() {
   }
   if (state.screens.name?.isMesh) {
     state.screens.name.material = placeholderMaterial('NAME');
-    if (state.screens.name.material?.map) calibrateScreenTextureForMesh(state.screens.name, state.screens.name.material.map, 'side');
+    if (state.screens.name.material?.map) calibrateScreenTextureForMesh(state.screens.name, state.screens.name.material.map, 'name');
   }
   if (state.screens.avatar?.isMesh) {
     state.screens.avatar.material = placeholderMaterial('AVATAR');
-    if (state.screens.avatar.material?.map) calibrateScreenTextureForMesh(state.screens.avatar, state.screens.avatar.material.map, 'side');
+    if (state.screens.avatar.material?.map) calibrateScreenTextureForMesh(state.screens.avatar, state.screens.avatar.material.map, 'avatar');
   }
 }
 
