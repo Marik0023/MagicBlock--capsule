@@ -1287,6 +1287,252 @@ function applyTextureOrientation(tex, kind = 'default') {
   return tex;
 }
 
+
+
+// ---------- Screen UV auto-calibration (no more manual centering) ----------
+// Some exports can have screen_* UVs that cover only part of the texture (or are rotated/mirrored).
+// We compute an affine UV->(screen space) transform per screen mesh and apply it to the CanvasTexture,
+// so the whole canvas always fits the whole physical screen and stays upright.
+
+function projectOntoPlane(v, n) {
+  // v - (v·n) n
+  const d = v.dot(n);
+  return v.clone().addScaledVector(n, -d);
+}
+
+function solve3x3(A, b) {
+  // Gaussian elimination for a 3x3 system
+  const m = [
+    [A[0][0], A[0][1], A[0][2], b[0]],
+    [A[1][0], A[1][1], A[1][2], b[1]],
+    [A[2][0], A[2][1], A[2][2], b[2]],
+  ];
+
+  for (let col = 0; col < 3; col++) {
+    // pivot
+    let pivot = col;
+    for (let r = col + 1; r < 3; r++) {
+      if (Math.abs(m[r][col]) > Math.abs(m[pivot][col])) pivot = r;
+    }
+    if (Math.abs(m[pivot][col]) < 1e-10) return null;
+    if (pivot !== col) {
+      const tmp = m[col]; m[col] = m[pivot]; m[pivot] = tmp;
+    }
+
+    // normalize row
+    const div = m[col][col];
+    for (let c = col; c < 4; c++) m[col][c] /= div;
+
+    // eliminate
+    for (let r = 0; r < 3; r++) {
+      if (r === col) continue;
+      const f = m[r][col];
+      for (let c = col; c < 4; c++) m[r][c] -= f * m[col][c];
+    }
+  }
+
+  return [m[0][3], m[1][3], m[2][3]];
+}
+
+function computeScreenUvCalibration(mesh) {
+  if (!mesh?.isMesh || !mesh.geometry?.attributes?.uv || !mesh.geometry.attributes.position) return null;
+
+  const geo = mesh.geometry;
+  const pos = geo.attributes.position.array;
+  const uv = geo.attributes.uv.array;
+  const count = Math.min(geo.attributes.position.count, geo.attributes.uv.count);
+
+  // Sample step to keep it fast
+  const maxSamples = 1200;
+  const step = Math.max(1, Math.floor(count / maxSamples));
+
+  // Try to get a valid normal from 3 non-collinear points
+  const p0 = new THREE.Vector3();
+  const p1 = new THREE.Vector3();
+  const p2 = new THREE.Vector3();
+  const normalLocal = new THREE.Vector3();
+  let okNormal = false;
+
+  for (let i = 0; i < count - 2; i += step) {
+    const i0 = i;
+    const i1 = Math.min(count - 1, i + step);
+    const i2 = Math.min(count - 1, i + step * 2);
+
+    p0.set(pos[i0 * 3], pos[i0 * 3 + 1], pos[i0 * 3 + 2]);
+    p1.set(pos[i1 * 3], pos[i1 * 3 + 1], pos[i1 * 3 + 2]);
+    p2.set(pos[i2 * 3], pos[i2 * 3 + 1], pos[i2 * 3 + 2]);
+
+    const v1 = p1.clone().sub(p0);
+    const v2 = p2.clone().sub(p0);
+    normalLocal.copy(v1.cross(v2));
+    if (normalLocal.lengthSq() > 1e-10) { okNormal = true; break; }
+  }
+
+  if (!okNormal) return null;
+
+  normalLocal.normalize();
+  const normalWorld = normalLocal.clone().applyMatrix3(new THREE.Matrix3().getNormalMatrix(mesh.matrixWorld)).normalize();
+
+  const worldUp = new THREE.Vector3(0, 1, 0);
+  const worldForward = new THREE.Vector3(0, 0, 1);
+
+  const meshWorldQuat = new THREE.Quaternion();
+  mesh.getWorldQuaternion(meshWorldQuat);
+  const localUpWorld = new THREE.Vector3(0, 1, 0).applyQuaternion(meshWorldQuat);
+  const localRightWorld = new THREE.Vector3(1, 0, 0).applyQuaternion(meshWorldQuat);
+
+  const meshCenter = new THREE.Vector3();
+  new THREE.Box3().setFromObject(mesh).getCenter(meshCenter);
+
+  const camAway = new THREE.Vector3().subVectors(meshCenter, camera.position); // away from camera
+
+  const candidates = [
+    projectOntoPlane(worldUp, normalWorld),
+    projectOntoPlane(localUpWorld, normalWorld),
+    projectOntoPlane(camAway, normalWorld),
+    projectOntoPlane(worldForward, normalWorld),
+  ];
+
+  let upDir = null;
+  for (const c of candidates) {
+    if (c.lengthSq() > 1e-8) { upDir = c.normalize(); break; }
+  }
+  if (!upDir) return null;
+
+  // right = up x normal (in plane)
+  let rightDir = upDir.clone().cross(normalWorld);
+  if (rightDir.lengthSq() < 1e-10) rightDir = normalWorld.clone().cross(upDir);
+  rightDir.normalize();
+
+  // Align "right" with the mesh local right as much as possible (stabilizes mirrored exports)
+  if (rightDir.dot(localRightWorld) < 0) rightDir.multiplyScalar(-1);
+
+  const downDir = upDir.clone().multiplyScalar(-1);
+
+  // First pass: min/max in right/down coordinates
+  let minW = Infinity, maxW = -Infinity, minH = Infinity, maxH = -Infinity;
+  const tmpWorld = new THREE.Vector3();
+  for (let i = 0; i < count; i += step) {
+    tmpWorld.set(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]).applyMatrix4(mesh.matrixWorld);
+    const wCoord = tmpWorld.dot(rightDir);
+    const hCoord = tmpWorld.dot(downDir);
+    if (wCoord < minW) minW = wCoord;
+    if (wCoord > maxW) maxW = wCoord;
+    if (hCoord < minH) minH = hCoord;
+    if (hCoord > maxH) maxH = hCoord;
+  }
+
+  const rangeW = maxW - minW;
+  const rangeH = maxH - minH;
+  if (rangeW < 1e-8 || rangeH < 1e-8) return null;
+
+  // Second pass: least squares for u and v as affine functions of (w,h,1)
+  let Sww = 0, Shh = 0, Swh = 0, Sw = 0, Sh = 0, N = 0;
+  let Suw = 0, Suh = 0, Su = 0;
+  let Svw = 0, Svh = 0, Sv = 0;
+
+  for (let i = 0; i < count; i += step) {
+    tmpWorld.set(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]).applyMatrix4(mesh.matrixWorld);
+
+    const w = (tmpWorld.dot(rightDir) - minW) / rangeW;
+    const h = (tmpWorld.dot(downDir) - minH) / rangeH;
+
+    const u = uv[i * 2];
+    const v = uv[i * 2 + 1];
+
+    Sww += w * w;
+    Shh += h * h;
+    Swh += w * h;
+    Sw += w;
+    Sh += h;
+    N += 1;
+
+    Suw += w * u;
+    Suh += h * u;
+    Su += u;
+
+    Svw += w * v;
+    Svh += h * v;
+    Sv += v;
+  }
+
+  const A = [
+    [Sww, Swh, Sw],
+    [Swh, Shh, Sh],
+    [Sw,  Sh,  N],
+  ];
+
+  const coefU = solve3x3(A, [Suw, Suh, Su]); // u = p*w + q*h + r
+  const coefV = solve3x3(A, [Svw, Svh, Sv]); // v = s*w + t*h + u0
+
+  // Fallback: UV bounds normalization only
+  const boundsFallback = () => {
+    let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
+    for (let i = 0; i < count; i += step) {
+      const uu = uv[i * 2], vv = uv[i * 2 + 1];
+      if (uu < minU) minU = uu;
+      if (uu > maxU) maxU = uu;
+      if (vv < minV) minV = vv;
+      if (vv > maxV) maxV = vv;
+    }
+    const du = (maxU - minU) || 1;
+    const dv = (maxV - minV) || 1;
+    const mat = new THREE.Matrix3();
+    mat.set(
+      1 / du, 0, -minU / du,
+      0, 1 / dv, -minV / dv,
+      0, 0, 1
+    );
+    return mat;
+  };
+
+  if (!coefU || !coefV) return boundsFallback();
+
+  const p = coefU[0], q = coefU[1], r = coefU[2];
+  const s = coefV[0], t = coefV[1], u0 = coefV[2];
+
+  const det = p * t - q * s;
+  if (Math.abs(det) < 1e-10) return boundsFallback();
+
+  const inv11 = t / det;
+  const inv12 = -q / det;
+  const inv21 = -s / det;
+  const inv22 = p / det;
+
+  const c1 = -(inv11 * r + inv12 * u0);
+  const c2 = -(inv21 * r + inv22 * u0);
+
+  const mat = new THREE.Matrix3();
+  mat.set(
+    inv11, inv12, c1,
+    inv21, inv22, c2,
+    0,    0,    1
+  );
+  return mat;
+}
+
+function calibrateScreenTextureForMesh(mesh, tex) {
+  if (!mesh?.isMesh || !tex) return;
+
+  // Make sure matrixWorld is up to date before analyzing UV orientation.
+  mesh.updateWorldMatrix(true, false);
+
+  if (!mesh.userData.__screenUvMatrix) {
+    const mat = computeScreenUvCalibration(mesh);
+    mesh.userData.__screenUvMatrix = mat || new THREE.Matrix3().identity();
+  }
+
+  tex.flipY = false;
+  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+
+  tex.matrixAutoUpdate = false;
+  tex.matrix.copy(mesh.userData.__screenUvMatrix);
+
+  tex.needsUpdate = true;
+}
+
+
 function makeCanvasPack(width, height, painter) {
   const canvas = document.createElement('canvas');
   canvas.width = width;
@@ -1320,7 +1566,13 @@ function createScreenMaterial(tex, emissiveHex = 0x0a1320, emissiveIntensity = 0
 function ensureScreenFxPack(key, width, height) {
   if (state.screenFx[key]) return state.screenFx[key];
   const pack = makeCanvasPack(width, height);
-  applyTextureOrientation(pack.tex, key);
+
+  // Screen textures are calibrated per-mesh (UV + orientation) when applied.
+  // This prevents "cropped / off-center" screens even if the GLB UVs use only a sub-rectangle.
+  pack.tex.flipY = false; // match glTF convention used by this project
+  pack.tex.wrapS = THREE.ClampToEdgeWrapping;
+  pack.tex.wrapT = THREE.ClampToEdgeWrapping;
+
   state.screenFx[key] = pack;
   return pack;
 }
@@ -1619,12 +1871,6 @@ function drawLockGlyph(ctx, x, y, size, progressClosed) {
 }
 
 function drawLidScreenCanvas(ctx, w, h, time) {
-  // LID SCREEN FIX: current lid UVs display text mirrored horizontally,
-  // so we pre-flip the canvas once here to make the final screen readable.
-  ctx.save();
-  ctx.translate(w, 0);
-  ctx.scale(-1, 1);
-
   drawScreenGlassBg(ctx, w, h, {
     radius: 44,
     border: 4,
@@ -1633,6 +1879,7 @@ function drawLidScreenCanvas(ctx, w, h, time) {
     accentB: 'rgba(123,134,255,0.28)',
     inner: 'rgba(7,11,17,0.92)',
   });
+
   drawTabletBezelChrome(ctx, w, h, time, {
     radius: 44,
     outerPad: 2,
@@ -1643,22 +1890,22 @@ function drawLidScreenCanvas(ctx, w, h, time) {
     bottomDock: true,
   });
 
-  // Small device header chips / indicators (cosmic tablet feel)
+  // Header pills
   drawUiPill(ctx, w * 0.08, h * 0.10, w * 0.14, 28, 'SYS', { active: true, align: 'center' });
-  drawUiPill(ctx, w * 0.24, h * 0.10, w * 0.16, 28, 'LOCK', { active: state.sealed || state.sealAnimPlaying });
-  drawUiPill(ctx, w * 0.78, h * 0.10, w * 0.10, 28, 'TX', { active: true });
+  drawUiPill(ctx, w * 0.43, h * 0.10, w * 0.14, 28, 'LOCK', { active: state.sealed || state.sealAnimPlaying, align: 'center' });
+  drawUiPill(ctx, w * 0.78, h * 0.10, w * 0.10, 28, 'TX', { active: true, align: 'center' });
 
   const closeP = 1 - clamp01(state.lidAnimT);
-  const sealP = state.sealAnimPlaying ? closeP : (state.sealed ? 1 : 0);
-  const x = w * 0.22;
-  const y = h * 0.5;
-  drawLockGlyph(ctx, x, y, h * 0.55, sealP);
+  const sealP = state.sealAnimPlaying ? easeOutCubic(closeP) : (state.sealed ? 1 : 0);
 
-  const status = state.sealed ? 'SEALED' : (state.sealAnimPlaying ? 'LOCKING…' : 'UNLOCKED');
-  ctx.textAlign = 'left';
+  // Main lock glyph centered
+  drawLockGlyph(ctx, w * 0.5, h * 0.46, h * 0.62, sealP);
+
+  const status = state.sealed ? 'SEALED' : (state.sealAnimPlaying ? 'LOCKING…' : 'READY');
+  ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
-  const titleGrad = ctx.createLinearGradient(w * 0.36, 0, w * 0.92, 0);
+  const titleGrad = ctx.createLinearGradient(w * 0.25, 0, w * 0.75, 0);
   if (state.sealed) {
     titleGrad.addColorStop(0, '#d7f2ff');
     titleGrad.addColorStop(1, '#8ad5ff');
@@ -1666,20 +1913,29 @@ function drawLidScreenCanvas(ctx, w, h, time) {
     titleGrad.addColorStop(0, '#c8ffea');
     titleGrad.addColorStop(1, '#83ffd0');
   }
+
+  ctx.shadowColor = 'rgba(118,220,255,0.35)';
+  ctx.shadowBlur = 16;
   ctx.fillStyle = titleGrad;
-  ctx.font = '800 60px Inter, sans-serif';
-  ctx.fillText(status, w * 0.36, h * 0.42);
+  ctx.font = '800 64px Inter, sans-serif';
+  ctx.fillText(status, w / 2, h * 0.68);
 
-  ctx.font = '600 24px Inter, sans-serif';
-  ctx.fillStyle = 'rgba(211,233,255,0.72)';
-  ctx.fillText('TGE CAPSULE SECURITY', w * 0.36, h * 0.62);
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = 'rgba(211,233,255,0.70)';
+  ctx.font = '600 22px Inter, sans-serif';
+  ctx.fillText('TGE CAPSULE SECURITY', w / 2, h * 0.80);
 
-  const barX = w * 0.36, barY = h * 0.73, barW = w * 0.5, barH = 26;
+  // Centered progress bar
+  const barW = w * 0.56;
+  const barH = 26;
+  const barX = (w - barW) / 2;
+  const barY = h * 0.86;
+
   ctx.fillStyle = 'rgba(255,255,255,0.06)';
   roundRect(ctx, barX, barY, barW, barH, 13);
   ctx.fill();
 
-  const fillP = state.sealed ? 1 : (state.sealAnimPlaying ? easeOutCubic(closeP) : 0.18 + Math.sin(time * 2.3) * 0.03);
+  const fillP = state.sealed ? 1 : (state.sealAnimPlaying ? easeOutCubic(closeP) : 0.22 + Math.sin(time * 2.3) * 0.04);
   const fillGrad = ctx.createLinearGradient(barX, barY, barX + barW, barY);
   fillGrad.addColorStop(0, state.sealed ? 'rgba(120,214,255,0.95)' : 'rgba(111,255,203,0.95)');
   fillGrad.addColorStop(1, 'rgba(125,136,255,0.9)');
@@ -1687,25 +1943,17 @@ function drawLidScreenCanvas(ctx, w, h, time) {
   roundRect(ctx, barX + 2, barY + 2, Math.max(10, (barW - 4) * clamp01(fillP)), barH - 4, 11);
   ctx.fill();
 
-  const sweepX = ((time * 180) % (barW + 120)) - 60;
+  // Light sweep
+  const sweepX = ((time * 220) % (barW + 160)) - 80;
   ctx.save();
   roundRect(ctx, barX + 2, barY + 2, barW - 4, barH - 4, 11);
   ctx.clip();
-  const sweep = ctx.createLinearGradient(barX + sweepX - 40, barY, barX + sweepX + 40, barY);
+  const sweep = ctx.createLinearGradient(barX + sweepX - 50, barY, barX + sweepX + 50, barY);
   sweep.addColorStop(0, 'rgba(255,255,255,0)');
-  sweep.addColorStop(0.5, 'rgba(255,255,255,0.38)');
+  sweep.addColorStop(0.5, 'rgba(255,255,255,0.36)');
   sweep.addColorStop(1, 'rgba(255,255,255,0)');
   ctx.fillStyle = sweep;
   ctx.fillRect(barX, barY, barW, barH);
-  ctx.restore();
-
-  // restore pre-flip wrapper
-  // Tiny footer control buttons
-  const btnBaseY = h * 0.82;
-  drawUiPill(ctx, w * 0.10, btnBaseY, w * 0.11, 24, 'A1', { active: true, font: '700 11px Inter, sans-serif' });
-  drawUiPill(ctx, w * 0.22, btnBaseY, w * 0.11, 24, 'A2', { font: '700 11px Inter, sans-serif' });
-  drawUiPill(ctx, w * 0.84, btnBaseY, w * 0.10, 24, 'OK', { active: state.sealed, font: '700 11px Inter, sans-serif' });
-
   ctx.restore();
 }
 
@@ -1720,6 +1968,7 @@ function drawNameScreenCanvas(ctx, w, h, time) {
     accentB: 'rgba(123,134,255,0.2)',
     inner: 'rgba(10,14,22,0.92)',
   });
+
   drawTabletBezelChrome(ctx, w, h, time, {
     radius: 36,
     outerPad: 2,
@@ -1730,48 +1979,34 @@ function drawNameScreenCanvas(ctx, w, h, time) {
     bottomDock: true,
   });
 
-  // Header system pills / signal bars
-  drawUiPill(ctx, 26, 18, 118, 22, 'IDENT', { active: true, align: 'left' });
-  drawUiPill(ctx, 150, 18, 110, 22, 'SECURE', { active: true, align: 'left' });
-  const sigX = w - 170, sigY = 20;
-  for (let i = 0; i < 5; i++) {
-    const bh = 4 + i * 3;
-    ctx.fillStyle = `rgba(111,228,255,${(0.18 + 0.14 * i + 0.08 * Math.sin(time * 3 + i)).toFixed(3)})`;
-    roundRect(ctx, sigX + i * 12, sigY + (18 - bh), 8, bh, 3);
-    ctx.fill();
-  }
-
+  // Subtle scan lines
   ctx.save();
-  roundRect(ctx, 8, 8, w - 16, h - 16, 32);
+  roundRect(ctx, 10, 10, w - 20, h - 20, 30);
   ctx.clip();
-
-  for (let i = 0; i < 9; i++) {
-    const yy = ((time * 42 + i * 40) % (h + 80)) - 40;
-    const g = ctx.createLinearGradient(0, yy, 0, yy + 24);
+  for (let i = 0; i < 10; i++) {
+    const yy = ((time * 50 + i * 36) % (h + 90)) - 45;
+    const g = ctx.createLinearGradient(0, yy, 0, yy + 22);
     g.addColorStop(0, 'rgba(0,0,0,0)');
     g.addColorStop(0.5, 'rgba(120,210,255,0.10)');
     g.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.fillStyle = g;
-    ctx.fillRect(0, yy, w, 24);
+    ctx.fillRect(0, yy, w, 22);
   }
-
-  const sweepX = ((time * 240) % (w + 240)) - 120;
-  const sweep = ctx.createLinearGradient(sweepX - 100, 0, sweepX + 100, 0);
-  sweep.addColorStop(0, 'rgba(255,255,255,0)');
-  sweep.addColorStop(0.5, 'rgba(170,235,255,0.18)');
-  sweep.addColorStop(1, 'rgba(255,255,255,0)');
-  ctx.fillStyle = sweep;
-  ctx.fillRect(0, 0, w, h);
   ctx.restore();
 
+  // Header
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
+  ctx.font = '600 18px Inter, sans-serif';
+  ctx.fillStyle = 'rgba(197,221,255,0.56)';
+  ctx.fillText('IDENTITY LINKED', w / 2, h * 0.20);
 
+  // Centered nickname (auto-size)
   let size = 92;
   if (nick.length > 14) size = 72;
   if (nick.length > 18) size = 58;
 
-  const pulse = 0.92 + Math.sin(time * 3.8) * 0.04;
+  const pulse = 0.96 + Math.sin(time * 3.6) * 0.03;
   const nameGrad = ctx.createLinearGradient(0, 0, w, 0);
   nameGrad.addColorStop(0, '#e8f8ff');
   nameGrad.addColorStop(0.45, '#b8eeff');
@@ -1781,18 +2016,17 @@ function drawNameScreenCanvas(ctx, w, h, time) {
   ctx.shadowBlur = 18;
   ctx.fillStyle = nameGrad;
   ctx.font = `800 ${Math.round(size * pulse)}px Inter, sans-serif`;
-  ctx.fillText(nick, w / 2, h * 0.54);
+  ctx.fillText(nick, w / 2, h / 2);
 
   ctx.shadowBlur = 0;
-  ctx.font = '600 18px Inter, sans-serif';
-  ctx.fillStyle = 'rgba(197,221,255,0.56)';
-  ctx.fillText('IDENTITY LINKED', w / 2, h * 0.2);
 
-  // Bottom functional buttons / labels
-  drawUiPill(ctx, w * 0.12, h * 0.78, w * 0.12, 24, 'SCAN', { active: true, font: '700 11px Inter, sans-serif' });
-  drawUiPill(ctx, w * 0.26, h * 0.78, w * 0.12, 24, 'SYNC', { font: '700 11px Inter, sans-serif' });
-  drawUiPill(ctx, w * 0.62, h * 0.78, w * 0.12, 24, 'NODE', { font: '700 11px Inter, sans-serif' });
-  drawUiPill(ctx, w * 0.76, h * 0.78, w * 0.12, 24, 'OK', { active: true, font: '700 11px Inter, sans-serif' });
+  // Bottom pills (kept, but symmetric)
+  const y = h * 0.80;
+  const pillW = w * 0.14;
+  drawUiPill(ctx, w * 0.18 - pillW / 2, y, pillW, 24, 'SCAN', { active: true, font: '700 11px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.38 - pillW / 2, y, pillW, 24, 'SYNC', { font: '700 11px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.62 - pillW / 2, y, pillW, 24, 'NODE', { font: '700 11px Inter, sans-serif' });
+  drawUiPill(ctx, w * 0.82 - pillW / 2, y, pillW, 24, 'OK', { active: true, font: '700 11px Inter, sans-serif' });
 }
 
 function drawAvatarScreenCanvas(ctx, w, h, time) {
@@ -1804,6 +2038,7 @@ function drawAvatarScreenCanvas(ctx, w, h, time) {
     accentB: 'rgba(123,134,255,0.18)',
     inner: 'rgba(10,14,22,0.94)',
   });
+
   drawTabletBezelChrome(ctx, w, h, time, {
     radius: 56,
     outerPad: 2,
@@ -1814,13 +2049,14 @@ function drawAvatarScreenCanvas(ctx, w, h, time) {
     bottomDock: true,
   });
 
-  // Top bar controls / mini buttons
+  // Top controls
   drawUiPill(ctx, w * 0.08, h * 0.05, w * 0.18, 24, 'VISOR', { active: true, align: 'left', font: '700 11px Inter, sans-serif' });
   drawUiPill(ctx, w * 0.28, h * 0.05, w * 0.14, 24, 'CAM', { font: '700 11px Inter, sans-serif' });
   drawUiPill(ctx, w * 0.72, h * 0.05, w * 0.08, 24, 'A', { active: true, font: '700 11px Inter, sans-serif' });
   drawUiPill(ctx, w * 0.82, h * 0.05, w * 0.10, 24, 'REC', { active: !!state.avatarImgLoaded, font: '700 11px Inter, sans-serif' });
 
-  const pad = 48;
+  // Inner screen area
+  const pad = 56;
   const innerX = pad;
   const innerY = pad;
   const innerW = w - pad * 2;
@@ -1838,14 +2074,35 @@ function drawAvatarScreenCanvas(ctx, w, h, time) {
 
   const img = state.avatarImgEl;
   if (img && state.avatarImgLoaded) {
-    const floatX = Math.sin(time * 1.6) * 7;
-    const floatY = Math.cos(time * 1.9) * 6;
-    const scale = Math.max(innerW / img.width, innerH / img.height) * (1.03 + Math.sin(time * 1.4) * 0.01);
-    const dw = img.width * scale;
-    const dh = img.height * scale;
-    const dx = innerX + (innerW - dw) / 2 + floatX;
-    const dy = innerY + (innerH - dh) / 2 + floatY;
-    ctx.drawImage(img, dx, dy, dw, dh);
+    const floatX = Math.sin(time * 1.6) * 6;
+    const floatY = Math.cos(time * 1.9) * 5;
+
+    // 1) Fill background with a blurred "cover" (no empty bars)
+    ctx.save();
+    ctx.globalAlpha = 0.92;
+    ctx.filter = 'blur(18px)';
+    const coverScale = Math.max(innerW / img.width, innerH / img.height);
+    const cW = img.width * coverScale;
+    const cH = img.height * coverScale;
+    const cX = innerX + (innerW - cW) / 2;
+    const cY = innerY + (innerH - cH) / 2;
+    ctx.drawImage(img, cX, cY, cW, cH);
+    ctx.restore();
+
+    // 2) Darken a bit for readability
+    const bg = ctx.createLinearGradient(innerX, innerY, innerX + innerW, innerY + innerH);
+    bg.addColorStop(0, 'rgba(0,0,0,0.20)');
+    bg.addColorStop(1, 'rgba(0,0,0,0.34)');
+    ctx.fillStyle = bg;
+    ctx.fillRect(innerX, innerY, innerW, innerH);
+
+    // 3) Foreground avatar "contain" (NO cropping) — always centered
+    const containScale = Math.min(innerW / img.width, innerH / img.height) * (1.0 + Math.sin(time * 1.4) * 0.006);
+    const dW = img.width * containScale;
+    const dH = img.height * containScale;
+    const dX = innerX + (innerW - dW) / 2 + floatX;
+    const dY = innerY + (innerH - dH) / 2 + floatY;
+    ctx.drawImage(img, dX, dY, dW, dH);
   } else {
     const ph = ctx.createLinearGradient(innerX, innerY, innerX + innerW, innerY + innerH);
     ph.addColorStop(0, 'rgba(28,38,56,0.95)');
@@ -1860,6 +2117,7 @@ function drawAvatarScreenCanvas(ctx, w, h, time) {
     ctx.fillText('AVATAR', w / 2, h / 2);
   }
 
+  // Sweep line
   const sweepY = ((time * 180) % (innerH + 160)) - 80;
   const sg = ctx.createLinearGradient(0, innerY + sweepY - 40, 0, innerY + sweepY + 40);
   sg.addColorStop(0, 'rgba(255,255,255,0)');
@@ -1869,6 +2127,7 @@ function drawAvatarScreenCanvas(ctx, w, h, time) {
   ctx.fillRect(innerX, innerY, innerW, innerH);
   ctx.restore();
 
+  // Corner accents
   ctx.strokeStyle = 'rgba(165,236,255,0.55)';
   ctx.lineWidth = 5;
   const c = 26;
@@ -1886,7 +2145,7 @@ function drawAvatarScreenCanvas(ctx, w, h, time) {
     ctx.stroke();
   }
 
-  // Bottom docking controls / status buttons (tablet hardware style)
+  // Bottom dock
   const dockY = h - 42;
   drawUiPill(ctx, w * 0.10, dockY, w * 0.16, 22, 'GRID', { font: '700 10px Inter, sans-serif' });
   drawUiPill(ctx, w * 0.28, dockY, w * 0.16, 22, 'ZOOM', { active: true, font: '700 10px Inter, sans-serif' });
@@ -1909,6 +2168,7 @@ function renderDynamicScreens(force = false) {
     if (!(state.screens.lid.material && state.screens.lid.material.map === pack.tex)) {
       state.screens.lid.material = createScreenMaterial(pack.tex, 0x071a19, 0.75);
     }
+    calibrateScreenTextureForMesh(state.screens.lid, pack.tex);
     state.screens.lid.material.emissiveIntensity = state.sealed ? 0.9 : 0.72;
   }
 
@@ -1919,6 +2179,7 @@ function renderDynamicScreens(force = false) {
     if (!(state.screens.name.material && state.screens.name.material.map === pack.tex)) {
       state.screens.name.material = createScreenMaterial(pack.tex, 0x0a1220, 0.65);
     }
+    calibrateScreenTextureForMesh(state.screens.name, pack.tex);
     state.screens.name.material.emissiveIntensity = 0.58 + Math.sin(now * 3.7) * 0.06;
   }
 
@@ -1929,6 +2190,7 @@ function renderDynamicScreens(force = false) {
     if (!(state.screens.avatar.material && state.screens.avatar.material.map === pack.tex)) {
       state.screens.avatar.material = createScreenMaterial(pack.tex, 0x091523, 0.62);
     }
+    calibrateScreenTextureForMesh(state.screens.avatar, pack.tex);
     state.screens.avatar.material.emissiveIntensity = 0.55 + Math.sin(now * 3.1 + 0.8) * 0.05;
   }
 }
@@ -2037,7 +2299,7 @@ function enhanceCapsuleAppearance() {
 }
 
 // ---------- Dynamic textures ----------
-function makeCanvasTexture(width, height, painter, kind = 'default') {
+function makeCanvasTexture(width, height, painter) {
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
@@ -2047,10 +2309,13 @@ function makeCanvasTexture(width, height, painter, kind = 'default') {
 
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
-  applyTextureOrientation(tex, kind);
+  tex.flipY = false;
+  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
   tex.needsUpdate = true;
   return tex;
 }
+
 
 function roundRect(ctx, x, y, w, h, r) {
   const rr = Math.min(r, w / 2, h / 2);
@@ -2096,19 +2361,18 @@ function placeholderMaterial(label) {
 function setupScreenPlaceholders() {
   if (state.screens.lid?.isMesh) {
     state.screens.lid.material = placeholderMaterial('LOCK');
+    if (state.screens.lid.material?.map) calibrateScreenTextureForMesh(state.screens.lid, state.screens.lid.material.map);
   }
   if (state.screens.name?.isMesh) {
     state.screens.name.material = placeholderMaterial('NAME');
+    if (state.screens.name.material?.map) calibrateScreenTextureForMesh(state.screens.name, state.screens.name.material.map);
   }
   if (state.screens.avatar?.isMesh) {
     state.screens.avatar.material = placeholderMaterial('AVATAR');
+    if (state.screens.avatar.material?.map) calibrateScreenTextureForMesh(state.screens.avatar, state.screens.avatar.material.map);
   }
-
-  ['lid','name','avatar'].forEach((k) => {
-    const m = state.screens[k]?.material;
-    if (m?.map) applyTextureOrientation(m.map, k);
-  });
 }
+
 
 function updateDynamicTextures() {
   if (state.avatarDataUrl && (!state.avatarImgEl || !state.avatarImgLoaded)) {
