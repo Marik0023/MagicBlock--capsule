@@ -1055,6 +1055,45 @@ loader.load(
     state.screens.name = gltf.scene.getObjectByName('screen_name');
     state.screens.avatar = gltf.scene.getObjectByName('screen_avatar');
 
+    // --- Screen position/scale corrections (adjust after GLB redesign) ---
+    // Log current transforms so we can fine-tune values in the console
+    ['lid', 'name', 'avatar'].forEach(k => {
+      const s = state.screens[k];
+      if (s) {
+        const wp = new THREE.Vector3();
+        s.getWorldPosition(wp);
+        console.info(`[screen_${k}] worldPos=`, wp, ' localPos=', s.position.clone(), ' scale=', s.scale.clone());
+      }
+    });
+
+    // screen_avatar: зменшити і центрувати
+    if (state.screens.avatar) {
+      const av = state.screens.avatar;
+      av.scale.multiplyScalar(0.65);           // зменшити (підбери: 0.5–0.8)
+      av.position.x += 0.0;                   // зсув по X (+ = вправо)
+      av.position.y += 0.0;                   // зсув по Y (+ = вгору)
+      av.position.z += 0.0;                   // зсув по Z
+    }
+
+    // screen_name: зменшити і центрувати
+    if (state.screens.name) {
+      const nm = state.screens.name;
+      nm.scale.multiplyScalar(0.65);           // зменшити (підбери: 0.5–0.8)
+      nm.position.x += 0.0;
+      nm.position.y += 0.0;
+      nm.position.z += 0.0;
+    }
+
+    // screen_lid: зменшити і центрувати
+    if (state.screens.lid) {
+      const ld = state.screens.lid;
+      ld.scale.multiplyScalar(0.65);           // зменшити (підбери: 0.5–0.8)
+      ld.position.x += 0.0;
+      ld.position.y += 0.0;
+      ld.position.z += 0.0;
+    }
+    // --- End screen corrections ---
+
     // Lid pose setup
     if (state.lidBone || state.lidControl) {
       const boneNode = state.lidBone || state.lidControl;
