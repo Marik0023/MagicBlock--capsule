@@ -37,7 +37,7 @@ const screenTuner = {
   // x/y are in screen fraction (-1..1), scale/stretch are multipliers, rotate is in degrees
   name:   { x: 0.00, y: 0.250, scale: 0.56, stretchX: 2.30, stretchY: 1.00, rotate: -90, flipX: true, flipY: false },
   avatar: { x: 0.00, y: -0.255, scale: 1.31, stretchX: 0.78, stretchY: 0.63, rotate: 0, flipX: true, flipY: true },
-  lid:    { x: 0.275, y: 0.160, scale: 0.60, stretchX: 1.00, stretchY: 1.00, rotate: -90, flipX: false, flipY: true },
+  lid:    { x: 0.275, y: 0.160, scale: 0.60, stretchX: 1.00, stretchY: 1.00, rotate: 0, flipX: false, flipY: true, swapUV: true },
 };
 
 // === SCREEN TUNER UI (temporary; used to pick perfect values, then removed) ===
@@ -1637,10 +1637,7 @@ function computeFrontGlassUvBounds(mesh) {
 
   const result = { minU, maxU, minV, maxV };
   mesh.userData[cacheKey] = result;
-  return result;
-}
-
-function calibrateScreenTextureForMesh(mesh, tex, kind = 'side') {
+  returnfunction calibrateScreenTextureForMesh(mesh, tex, kind = 'side') {
   if (!mesh?.isMesh || !tex) return;
   const geo = mesh.geometry;
   const uva = geo?.attributes?.uv?.array;
@@ -1648,33 +1645,31 @@ function calibrateScreenTextureForMesh(mesh, tex, kind = 'side') {
   if (!uva || uvCount < 3) return;
 
   const cacheKey = `__screenTexMatrix_${kind}`;
-  const _tuner = (kind === 'lid') ? screenTuner.lid : (kind === 'name') ? screenTuner.name : (kind === 'avatar') ? screenTuner.avatar : null;
-  if (window.__SCREEN_TUNER_DYNAMIC && _tuner) {
-    // Recompute every time while tuning so Rotate/Flip updates immediately.
-    delete mesh.userData[cacheKey];
-  }
+
+  // We hardcode screenTuner (no UI). If you ever re-enable tuning, set window.__SCREEN_TUNER_DYNAMIC=true.
+  const t = (kind === 'lid') ? screenTuner.lid : (kind === 'name') ? screenTuner.name : (kind === 'avatar') ? screenTuner.avatar : null;
+  if (window.__SCREEN_TUNER_DYNAMIC) delete mesh.userData[cacheKey];
 
   if (!mesh.userData[cacheKey]) {
     // 1) UV bounds normalization: map the *front glass* UV region -> [0..1]
-// (the mesh can include frame/sides/backfaces; using global UV bounds crops the UI)
-const fb = computeFrontGlassUvBounds(mesh);
-let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
+    const fb = computeFrontGlassUvBounds(mesh);
+    let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
 
-if (fb) {
-  ({ minU, maxU, minV, maxV } = fb);
-} else {
-  for (let i = 0; i < uvCount; i++) {
-    const u = uva[i * 2];
-    const v = uva[i * 2 + 1];
-    if (u < minU) minU = u;
-    if (u > maxU) maxU = u;
-    if (v < minV) minV = v;
-    if (v > maxV) maxV = v;
-  }
-}
+    if (fb) {
+      ({ minU, maxU, minV, maxV } = fb);
+    } else {
+      for (let i = 0; i < uvCount; i++) {
+        const u = uva[i * 2];
+        const v = uva[i * 2 + 1];
+        if (u < minU) minU = u;
+        if (u > maxU) maxU = u;
+        if (v < minV) minV = v;
+        if (v > maxV) maxV = v;
+      }
+    }
 
-const du = (maxU - minU) || 1;
-const dv = (maxV - minV) || 1;
+    const du = (maxU - minU) || 1;
+    const dv = (maxV - minV) || 1;
 
     const bounds = new THREE.Matrix3();
     bounds.set(
@@ -1683,7 +1678,7 @@ const dv = (maxV - minV) || 1;
       0, 0, 1
     );
 
-    // 2) Orientation fix (this GLB has rotated screens; lid also mirrored).
+    // 2) Base orientation (export-specific): avatar is rotated -90° in this GLB; name and lid are not.
     const T = (tx, ty) => {
       const m = new THREE.Matrix3();
       m.set(1, 0, tx, 0, 1, ty, 0, 0, 1);
@@ -1696,41 +1691,64 @@ const dv = (maxV - minV) || 1;
       m.set(c, -s, 0, s, c, 0, 0, 0, 1);
       return m;
     };
+    const S = (sx, sy) => {
+      const m = new THREE.Matrix3();
+      m.set(sx, 0, 0, 0, sy, 0, 0, 0, 1);
+      return m;
+    };
     const rotAround = (rad, cx = 0.5, cy = 0.5) => T(cx, cy).multiply(R(rad)).multiply(T(-cx, -cy));
+    const scaleAround = (sx, sy, cx = 0.5, cy = 0.5) => T(cx, cy).multiply(S(sx, sy)).multiply(T(-cx, -cy));
 
-    let orient;
-    if (kind === 'lid') {
-      // Lid: keep UV unrotated here; apply flip/rotate in the *canvas* painter via screenTuner.lid.
-      orient = rotAround(0);
-    } else if (kind === 'name') {
-      // screen_name is landscape in this model — do NOT rotate it.
-      orient = rotAround(0);
+    let orient = new THREE.Matrix3();
+    orient.identity();
+
+    if (kind === 'avatar') {
+      orient = rotAround(-Math.PI / 2).multiply(orient);
     } else {
-      // screen_avatar / other side screens: -90° (standard for this export)
-      orient = rotAround(-Math.PI / 2);
+      // name + lid: keep base orientation
+      orient = rotAround(0).multiply(orient);
     }
 
-    // Optional user-controlled rotate/flip (debug tuner)
-    const t = (kind === 'lid') ? screenTuner.lid : (kind === 'name') ? screenTuner.name : (kind === 'avatar') ? screenTuner.avatar : null;
-    // For lid, the flip/rotate is handled in the canvas painter to avoid double transforms.
-    const tUV = (kind === 'lid') ? { rotate: 0, flipX: false, flipY: false } : t;
+    // 3) Per-screen transform (rotate/flip/swapUV) applied in UV space
+    if (t?.swapUV) {
+      // swap U and V (transpose) – required for lid UV layout in this model
+      const suv = new THREE.Matrix3();
+      suv.set(
+        0, 1, 0,
+        1, 0, 0,
+        0, 0, 1
+      );
+      orient = suv.multiply(orient);
+    }
 
-    if (tUV && Number.isFinite(tUV.rotate) && tUV.rotate !== 0) {
+    if (t && Number.isFinite(t.rotate) && t.rotate !== 0) {
       orient = rotAround((t.rotate * Math.PI) / 180).multiply(orient);
     }
 
-    if (tUV?.flipX) {
+    if (t?.flipX) {
       const fx = new THREE.Matrix3();
       fx.set(-1, 0, 1,  0, 1, 0,  0, 0, 1);
       orient = fx.multiply(orient);
     }
-    if (tUV?.flipY) {
+    if (t?.flipY) {
       const fy = new THREE.Matrix3();
       fy.set(1, 0, 0,  0, -1, 1,  0, 0, 1);
       orient = fy.multiply(orient);
     }
 
-    // Final: orient * bounds
+    // 4) Keep aspect stable: apply scale/stretch as UV repeat (around center) so UI doesn't "squish"
+    // (x/y/scale/stretch are already used in canvas painter; for lid we moved them out of painter,
+    // so we apply them here in UV space ONLY for lid.)
+    if (kind === 'lid') {
+      const sx = (t?.scale ?? 1) * (t?.stretchX ?? 1);
+      const sy = (t?.scale ?? 1) * (t?.stretchY ?? 1);
+      orient = scaleAround(sx, sy).multiply(orient);
+
+      const ox = (t?.x ?? 0);
+      const oy = (t?.y ?? 0);
+      orient = T(ox, oy).multiply(orient);
+    }
+
     mesh.userData[cacheKey] = orient.multiply(bounds);
   }
 
@@ -1740,6 +1758,7 @@ const dv = (maxV - minV) || 1;
   tex.matrixAutoUpdate = false;
   tex.matrix.copy(mesh.userData[cacheKey]);
   tex.needsUpdate = true;
+}te = true;
 }
 
 
@@ -2133,19 +2152,7 @@ function drawLidScreenCanvas(ctx, w, h, time) {
   ctx.fillStyle = scan;
   ctx.fillRect(0, 0, w, h);
 
-  // Apply fixed transform (x/y/scale/stretch/rot/flip) inside lid screen
-  const ldx = (screenTuner.lid.x || 0) * w;
-  const ldy = (screenTuner.lid.y || 0) * h;
-  const lsc = (screenTuner.lid.scale || 1);
-  const lsx = (screenTuner.lid.stretchX || 1);
-  const lsy = (screenTuner.lid.stretchY || 1);
-  const lrot = ((screenTuner.lid.rotate || 0) * Math.PI) / 180;
-
-  ctx.save();
-  ctx.translate(w * 0.5 + ldx, h * 0.5 + ldy);
-  ctx.rotate(lrot);
-  ctx.scale(lsc * lsx * (screenTuner.lid.flipX ? -1 : 1), lsc * lsy * (screenTuner.lid.flipY ? -1 : 1));
-  ctx.translate(-w * 0.5, -h * 0.5);
+  // Lid screen transform is applied in UV space (see calibrateScreenTextureForMesh)
 
   // Status
   const sealing = state.sealAnimPlaying;
